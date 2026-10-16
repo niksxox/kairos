@@ -9,7 +9,7 @@ import os
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 import pandas as pd
 
 from src.auth import hash_password, verify_password
@@ -25,8 +25,8 @@ class CampusDatabase:
     audit logs, multi-event reallocation proposals, and data ingestion history.
     """
 
-    def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or DEFAULT_DB_PATH
+    def __init__(self, db_path: Optional[Union[Path, str]] = None):
+        self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         os.makedirs(self.db_path.parent, exist_ok=True)
         self._init_schema()
         self._seed_default_users()
@@ -191,6 +191,97 @@ class CampusDatabase:
                 }
         return None
 
+    def find_duplicate_request(
+        self,
+        username: str,
+        room_id: Optional[str],
+        request_date: str,
+        start_hour: float,
+        duration_hours: float,
+        exact_only: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Checks if an active (Pending or Approved) booking request already exists
+        for the given user, room, date, and time.
+
+        If exact_only=True: Checks for identical start_hour and duration_hours.
+        If exact_only=False: Checks for any overlapping time interval:
+           max(new_start, exist_start) < min(new_end, exist_end)
+        """
+        new_start = float(start_hour)
+        new_end = new_start + float(duration_hours)
+
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            if room_id:
+                cur.execute("""
+                    SELECT request_id, username, room_id, request_date, start_hour, duration_hours, purpose, status
+                    FROM booking_requests
+                    WHERE username = ?
+                      AND room_id = ?
+                      AND request_date = ?
+                      AND status IN ('Pending', 'Approved')
+                """, (username, room_id, request_date))
+            else:
+                cur.execute("""
+                    SELECT request_id, username, room_id, request_date, start_hour, duration_hours, purpose, status
+                    FROM booking_requests
+                    WHERE username = ?
+                      AND request_date = ?
+                      AND status IN ('Pending', 'Approved')
+                """, (username, request_date))
+
+            rows = cur.fetchall()
+            for r in rows:
+                r_start = float(r["start_hour"])
+                r_dur = float(r["duration_hours"])
+                r_end = r_start + r_dur
+
+                if exact_only:
+                    if abs(r_start - new_start) < 1e-4 and abs(r_dur - float(duration_hours)) < 1e-4:
+                        return dict(r)
+                else:
+                    if max(new_start, r_start) < min(new_end, r_end):
+                        return dict(r)
+
+        return None
+
+    def find_user_time_clash(
+        self,
+        username: str,
+        request_date: str,
+        start_hour: float,
+        duration_hours: float,
+        exclude_room_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Checks if the user already has an Approved reservation in another room
+        at the same time on the same date (a person cannot be in two rooms at once).
+        """
+        new_start = float(start_hour)
+        new_end = new_start + float(duration_hours)
+
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT request_id, username, room_id, request_date, start_hour, duration_hours, purpose, status
+                FROM booking_requests
+                WHERE username = ?
+                  AND request_date = ?
+                  AND status = 'Approved'
+            """, (username, request_date))
+
+            rows = cur.fetchall()
+            for r in rows:
+                if exclude_room_id and r["room_id"] == exclude_room_id:
+                    continue
+                r_start = float(r["start_hour"])
+                r_end = r_start + float(r["duration_hours"])
+                if max(new_start, r_start) < min(new_end, r_end):
+                    return dict(r)
+
+        return None
+
     def create_booking_request(
         self,
         username: str,
@@ -203,12 +294,30 @@ class CampusDatabase:
         computers_required: bool = False,
         accessible_required: bool = False,
         purpose: str = "Study group",
-        auto_approve: bool = False
+        auto_approve: bool = False,
+        check_duplicate: bool = True
     ) -> str:
         """
         Creates a new persistent booking request.
         Evaluates institutional importance tier and generates a unique request ID.
+        If check_duplicate=True, prevents submitting an exact identical active request.
         """
+        if check_duplicate:
+            dup = self.find_duplicate_request(
+                username=username,
+                room_id=room_id,
+                request_date=request_date,
+                start_hour=start_hour,
+                duration_hours=duration_hours,
+                exact_only=True
+            )
+            if dup:
+                raise ValueError(
+                    f"Duplicate request: User '{username}' already has a {dup['status'].lower()} "
+                    f"request ({dup['request_id']}) for room {room_id or 'unassigned'} on {request_date} "
+                    f"at {int(start_hour):02d}:00."
+                )
+
         tier, score, _ = get_priority_info(purpose)
 
         with self._get_connection() as conn:

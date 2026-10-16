@@ -101,3 +101,95 @@ def test_admin_approval_and_collision_prevention(test_db):
     ok2, msg2 = test_db.approve_booking(req2, admin_username="admin", availability_checker=None)
     assert ok2 is False
     assert "Approval collision" in msg2
+
+
+def test_duplicate_request_prevention(test_db):
+    import pytest
+
+    # 1. First booking request
+    req1 = test_db.create_booking_request(
+        username="student_dup",
+        room_id="R002",
+        request_date="2025-09-20",
+        start_hour=10.0,
+        duration_hours=2.0,
+        required_capacity=30,
+        purpose="Midterm Study"
+    )
+    assert req1.startswith("K-REQ-")
+
+    # 2. Duplicate detection helper should find it
+    dup = test_db.find_duplicate_request(
+        username="student_dup",
+        room_id="R002",
+        request_date="2025-09-20",
+        start_hour=10.0,
+        duration_hours=2.0,
+        exact_only=True
+    )
+    assert dup is not None
+    assert dup["request_id"] == req1
+
+    # Overlapping duplicate detection should also find it
+    dup_overlap = test_db.find_duplicate_request(
+        username="student_dup",
+        room_id="R002",
+        request_date="2025-09-20",
+        start_hour=10.5,
+        duration_hours=1.0,
+        exact_only=False
+    )
+    assert dup_overlap is not None
+    assert dup_overlap["request_id"] == req1
+
+    # 3. Submitting an exact duplicate active request should raise ValueError
+    with pytest.raises(ValueError, match="Duplicate request"):
+        test_db.create_booking_request(
+            username="student_dup",
+            room_id="R002",
+            request_date="2025-09-20",
+            start_hour=10.0,
+            duration_hours=2.0,
+            required_capacity=30,
+            purpose="Midterm Study"
+        )
+
+
+def test_duplicate_request_allowed_after_cancellation(test_db):
+    # 1. Create request
+    req = test_db.create_booking_request(
+        username="student_rebook",
+        room_id="R003",
+        request_date="2025-09-22",
+        start_hour=14.0,
+        duration_hours=2.0,
+        required_capacity=20
+    )
+
+    # 2. Cancel request
+    ok, _ = test_db.cancel_booking(req, username="student_rebook")
+    assert ok is True
+
+    # 3. Duplicate finder should ignore cancelled requests
+    dup = test_db.find_duplicate_request(
+        username="student_rebook",
+        room_id="R003",
+        request_date="2025-09-22",
+        start_hour=14.0,
+        duration_hours=2.0,
+        exact_only=True
+    )
+    assert dup is None
+
+    # 4. Re-booking the room for that slot should succeed now
+    new_req = test_db.create_booking_request(
+        username="student_rebook",
+        room_id="R003",
+        request_date="2025-09-22",
+        start_hour=14.0,
+        duration_hours=2.0,
+        required_capacity=20
+    )
+    assert new_req.startswith("K-REQ-")
+    assert new_req != req
+

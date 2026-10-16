@@ -457,21 +457,55 @@ elif page == "Book a Room":
             with sel_col2:
                 st.write("")
                 if st.button(f"Book Room {selected_room}", type="primary"):
-                    req_id = db.create_booking_request(
+                    # 1. Check for duplicate request by this user
+                    dup = db.find_duplicate_request(
                         username=user["username"],
                         room_id=selected_room,
                         request_date=sp["date"],
                         start_hour=sp["start"],
                         duration_hours=sp["dur"],
-                        required_capacity=sp["cap"],
-                        projector_required=sp["proj"],
-                        computers_required=sp["comp"],
-                        accessible_required=sp["acc"],
-                        purpose=sp["purpose"],
-                        auto_approve=False
+                        exact_only=False
                     )
-                    st.success(f"Your booking request for {selected_room} has been submitted (ID: {req_id}). Campus staff will review it shortly.")
-                    st.rerun()
+                    if dup:
+                        st.warning(
+                            f"Duplicate Request: You already have a {dup['status'].lower()} request ({dup['request_id']}) "
+                            f"for Room {selected_room} on {sp['date']} during this time ({int(dup['start_hour']):02d}:00 - {int(dup['start_hour']+dup['duration_hours']):02d}:00). "
+                            f"Duplicate request was not submitted."
+                        )
+                    else:
+                        # 2. Check for time clash with user's other approved bookings
+                        clash = db.find_user_time_clash(
+                            username=user["username"],
+                            request_date=sp["date"],
+                            start_hour=sp["start"],
+                            duration_hours=sp["dur"],
+                            exclude_room_id=selected_room
+                        )
+                        if clash:
+                            st.warning(
+                                f"Schedule Conflict: You already have a confirmed booking ({clash['request_id']}) "
+                                f"for Room {clash['room_id']} on {sp['date']} at {int(clash['start_hour']):02d}:00. "
+                                f"Please cancel your existing booking first if you wish to change rooms."
+                            )
+                        else:
+                            try:
+                                req_id = db.create_booking_request(
+                                    username=user["username"],
+                                    room_id=selected_room,
+                                    request_date=sp["date"],
+                                    start_hour=sp["start"],
+                                    duration_hours=sp["dur"],
+                                    required_capacity=sp["cap"],
+                                    projector_required=sp["proj"],
+                                    computers_required=sp["comp"],
+                                    accessible_required=sp["acc"],
+                                    purpose=sp["purpose"],
+                                    auto_approve=False
+                                )
+                                st.success(f"Your booking request for {selected_room} has been submitted (ID: {req_id}). Campus staff will review it shortly.")
+                                st.rerun()
+                            except ValueError as err:
+                                st.error(str(err))
 
 
 # -----------------------------------------------------------------------------
@@ -804,9 +838,22 @@ elif page == "Booking Approvals":
         st.write(f"**Pending Requests ({len(pending)} waiting for review):**")
         for _, r in pending.iterrows():
             req_id = r["request_id"]
+            # Check if another pending request competes for the same room and time
+            same_room_pending = pending[
+                (pending["room_id"] == r["room_id"]) &
+                (pending["request_date"] == r["request_date"]) &
+                (pending["request_id"] != req_id)
+            ]
+            has_conflict = False
+            for _, other in same_room_pending.iterrows():
+                if max(r["start_hour"], other["start_hour"]) < min(r["start_hour"]+r["duration_hours"], other["start_hour"]+other["duration_hours"]):
+                    has_conflict = True
+                    break
+            conflict_badge = ' &nbsp;<span class="tag tag-high">Competing Request for this Room</span>' if has_conflict else ''
+
             st.markdown(f"""
             <div class="card-box">
-                <div style="font-weight: 600; font-size: 1rem; color: #0f172a;">Request #{req_id} &bull; {r['purpose']}</div>
+                <div style="font-weight: 600; font-size: 1rem; color: #0f172a;">Request #{req_id} &bull; {r['purpose']}{conflict_badge}</div>
                 <div style="font-size: 0.85rem; color: #475569; margin-top: 0.25rem;">
                     Submitted by: <strong>{r['username']}</strong> &nbsp;|&nbsp;
                     Room: <strong>{r['room_id'] or 'Any Suitable'}</strong> &nbsp;|&nbsp;

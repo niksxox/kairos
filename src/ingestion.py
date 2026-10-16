@@ -75,6 +75,7 @@ class DataIngestionService:
         accepted = []
         errors = []
         seen_ids = set()
+        seen_req_signatures = set()
 
         id_key = f"{entity_type[:-1]}_id" if entity_type != "class_schedule" else "schedule_id"
         if entity_type == "rooms":
@@ -94,6 +95,23 @@ class DataIngestionService:
                 errors.append(f"Record {rec_id}: Duplicate identifier within batch")
                 continue
             seen_ids.add(rec_id)
+
+            # Check 2b: Duplicate request payload signature within batch
+            if entity_type == "room_requests":
+                try:
+                    sig = (
+                        str(rec.get("request_date", "")),
+                        float(rec.get("start_hour", 0)),
+                        float(rec.get("duration_hours", 0)),
+                        int(rec.get("required_capacity", 0)),
+                        str(rec.get("purpose", "")).strip().lower()
+                    )
+                    if sig in seen_req_signatures:
+                        errors.append(f"Record {rec_id}: Duplicate request payload — an identical request already exists in this import batch.")
+                        continue
+                    seen_req_signatures.add(sig)
+                except (ValueError, TypeError):
+                    pass
 
             # Check 3: Referential integrity for room_id
             if entity_type in ("class_schedule", "events") and self.existing_rooms:
@@ -162,5 +180,6 @@ class DataIngestionService:
             "total_rejected": total_rejected,
             "status": status,
             "accepted_records": accepted,
-            "errors": errors
+            "errors": errors,
+            "error_log": errors
         }

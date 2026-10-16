@@ -261,20 +261,39 @@ def get_bookings(status_filter: Optional[str] = Query(None), username: Optional[
 
 @app.post("/api/bookings", tags=["Bookings"])
 def create_booking(payload: BookingCreateRequest):
-    """Submits a new student room booking request."""
-    req_id = db.create_booking_request(
+    """Submits a new student room booking request, with duplicate request rejection."""
+    # Check for duplicate active request
+    dup = db.find_duplicate_request(
         username=payload.username,
         room_id=payload.room_id,
         request_date=payload.request_date,
         start_hour=payload.start_hour,
         duration_hours=payload.duration_hours,
-        required_capacity=payload.required_capacity,
-        projector_required=payload.projector_required,
-        computers_required=payload.computers_required,
-        accessible_required=payload.accessible_required,
-        purpose=payload.purpose,
-        auto_approve=payload.auto_approve
+        exact_only=False
     )
+    if dup:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Duplicate request: User '{payload.username}' already has a {dup['status'].lower()} request ({dup['request_id']}) for room {payload.room_id or 'unassigned'} on {payload.request_date} at {int(dup['start_hour']):02d}:00."
+        )
+
+    try:
+        req_id = db.create_booking_request(
+            username=payload.username,
+            room_id=payload.room_id,
+            request_date=payload.request_date,
+            start_hour=payload.start_hour,
+            duration_hours=payload.duration_hours,
+            required_capacity=payload.required_capacity,
+            projector_required=payload.projector_required,
+            computers_required=payload.computers_required,
+            accessible_required=payload.accessible_required,
+            purpose=payload.purpose,
+            auto_approve=payload.auto_approve
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=409, detail=str(err))
+
     return {"request_id": req_id, "status": "Pending", "message": "Booking request successfully recorded."}
 
 

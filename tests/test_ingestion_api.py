@@ -81,3 +81,60 @@ def test_api_booking_lifecycle(api_client):
     r_cancel = api_client.post(f"/api/bookings/{req_id}/cancel", json={"username": "student"})
     assert r_cancel.status_code == 200
     assert r_cancel.json()["status"] == "Cancelled"
+
+
+def test_api_duplicate_booking_rejection(api_client):
+    import uuid
+    u_name = f"api_student_{uuid.uuid4().hex[:8]}"
+    payload = {
+        "username": u_name,
+        "room_id": "R005",
+        "request_date": "2025-09-18",
+        "start_hour": 11.0,
+        "duration_hours": 2.0,
+        "required_capacity": 25,
+        "purpose": "Physics Exam Review",
+        "auto_approve": False
+    }
+
+    # 1. First submission succeeds
+    r1 = api_client.post("/api/bookings", json=payload)
+    assert r1.status_code == 200
+    assert "request_id" in r1.json()
+
+    # 2. Duplicate submission returns 409 Conflict
+    r2 = api_client.post("/api/bookings", json=payload)
+    assert r2.status_code == 409
+    assert "Duplicate request" in r2.json()["detail"]
+
+
+def test_ingestion_duplicate_request_rejection():
+    from src.ingestion import DataIngestionService
+
+    svc = DataIngestionService(database=None)
+
+    # Batch with duplicate request payload
+    batch = [
+        {
+            "request_id": "REQ_001",
+            "request_date": "2025-09-15",
+            "start_hour": 14.0,
+            "duration_hours": 2.0,
+            "required_capacity": 40,
+            "purpose": "AI Workshop"
+        },
+        {
+            "request_id": "REQ_002",
+            "request_date": "2025-09-15",
+            "start_hour": 14.0,
+            "duration_hours": 2.0,
+            "required_capacity": 40,
+            "purpose": "AI Workshop"
+        }
+    ]
+
+    res = svc.ingest_payload("room_requests", batch, source_name="test_duplicates.csv")
+    assert res["total_accepted"] == 1
+    assert res["total_rejected"] == 1
+    assert any("Duplicate request payload" in err for err in res["errors"])
+
