@@ -8,6 +8,12 @@ An explainable campus space decision-support system, mathematical multi-event ro
 - **Hackathon:** DATATHON 2026
 - **Track:** Education — The Campus Has Space. Students Don't.
 - **GitHub Repository:** [https://github.com/niksxox/kairos](https://github.com/niksxox/kairos)
+- **Live Public URL:** [https://bumper-whatever-packaging-believes.trycloudflare.com](https://bumper-whatever-packaging-believes.trycloudflare.com)
+- **1-Click Cloud Deploy (Streamlit Community Cloud):** [![Deploy to Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/deploy?repository=niksxox/kairos&branch=main&mainModule=app.py)
+
+### Demo Credentials
+- **Student Portal:** Username: `student` | Password: `student123`
+- **Administrator Portal:** Username: `admin` | Password: `admin123`
 
 ---
 
