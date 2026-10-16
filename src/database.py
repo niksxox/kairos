@@ -154,6 +154,30 @@ class CampusDatabase:
                 )
             """)
 
+            # 8. Student Room Swap Requests Table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS student_swap_requests (
+                    swap_id TEXT PRIMARY KEY,
+                    request_id TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    current_room_id TEXT NOT NULL,
+                    desired_room_id TEXT NOT NULL,
+                    request_date TEXT NOT NULL,
+                    start_hour REAL NOT NULL,
+                    duration_hours REAL NOT NULL,
+                    required_capacity INTEGER NOT NULL,
+                    reason TEXT,
+                    ml_recommendation TEXT,
+                    ml_reasoning TEXT,
+                    predicted_demand REAL,
+                    status TEXT NOT NULL DEFAULT 'Pending' CHECK(status IN ('Pending', 'Approved', 'Rejected')),
+                    decided_by TEXT,
+                    decided_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (request_id) REFERENCES booking_requests(request_id) ON DELETE CASCADE
+                )
+            """)
+
             conn.commit()
 
     def _seed_default_users(self):
@@ -694,3 +718,171 @@ class CampusDatabase:
             cur = conn.cursor()
             cur.execute("SELECT * FROM data_imports ORDER BY created_at DESC LIMIT 50")
             return [dict(r) for r in cur.fetchall()]
+
+    # -------------------------------------------------------------------------
+    # STUDENT ROOM SWAP REQUESTS
+    # -------------------------------------------------------------------------
+
+    def create_student_swap_request(
+        self,
+        request_id: str,
+        username: str,
+        current_room_id: str,
+        desired_room_id: str,
+        request_date: str,
+        start_hour: float,
+        duration_hours: float,
+        required_capacity: int,
+        reason: str,
+        ml_recommendation: str,
+        ml_reasoning: str,
+        predicted_demand: float
+    ) -> str:
+        """
+        Records a student request to swap or change rooms for an existing reservation.
+        Includes ML-computed demand forecast and optimization recommendation.
+        """
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM student_swap_requests")
+            next_idx = cur.fetchone()[0] + 1
+            swap_id = f"SWP-{next_idx:04d}"
+
+            conn.execute("""
+                INSERT INTO student_swap_requests (
+                    swap_id, request_id, username, current_room_id, desired_room_id,
+                    request_date, start_hour, duration_hours, required_capacity,
+                    reason, ml_recommendation, ml_reasoning, predicted_demand, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
+            """, (
+                swap_id, request_id, username, current_room_id, desired_room_id,
+                request_date, start_hour, duration_hours, required_capacity,
+                reason, ml_recommendation, ml_reasoning, predicted_demand
+            ))
+
+            conn.execute("""
+                INSERT INTO audit_logs (action, performed_by, entity_id, details)
+                VALUES ('CREATE_SWAP_REQUEST', ?, ?, ?)
+            """, (username, swap_id, f"Booking {request_id}: {current_room_id} -> {desired_room_id} on {request_date}"))
+            conn.commit()
+
+        return swap_id
+
+    def get_student_swap_requests(
+        self,
+        username: Optional[str] = None,
+        status_filter: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Returns student swap requests, optionally filtered by student or status."""
+        with self._get_connection() as conn:
+            query = "SELECT * FROM student_swap_requests"
+            params = []
+            conditions = []
+            if username:
+                conditions.append("username = ?")
+                params.append(username)
+            if status_filter:
+                conditions.append("status = ?")
+                params.append(status_filter)
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY created_at DESC"
+            cur = conn.cursor()
+            cur.execute(query, tuple(params))
+            return [dict(row) for row in cur.fetchall()]
+
+    def approve_student_swap_request(
+        self,
+        swap_id: str,
+        admin_username: str,
+        availability_checker = None
+    ) -> Tuple[bool, str]:
+        """
+        Approves a student room swap request. Atomically updates the booking's room assignment
+        and marks the swap request as Approved.
+        """
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM student_swap_requests WHERE swap_id = ?", (swap_id,))
+            swap = cur.fetchone()
+            if not swap:
+                return False, "Swap request not found."
+            if swap["status"] != "Pending":
+                return False, f"Swap request is already {swap['status'].lower()}."
+
+            desired_room = swap["desired_room_id"]
+            req_date = swap["request_date"]
+            s_hour = float(swap["start_hour"])
+            dur = float(swap["duration_hours"])
+            req_id = swap["request_id"]
+
+            # 1. Verify availability of target room against scheduled classes & events
+            if availability_checker is not None:
+                is_free, reason = availability_checker.is_room_available(
+                    desired_room, req_date, s_hour, dur
+                )
+                if not is_free:
+                    return False, f"Cannot approve swap: Target room {desired_room} is occupied ({reason})."
+
+            # 2. Check collision with other approved bookings
+            cur.execute("""
+                SELECT request_id, start_hour, duration_hours FROM booking_requests
+                WHERE room_id = ? AND request_date = ? AND status = 'Approved' AND request_id != ?
+            """, (desired_room, req_date, req_id))
+            for b in cur.fetchall():
+                b_start = float(b["start_hour"])
+                b_end = b_start + float(b["duration_hours"])
+                if max(s_hour, b_start) < min(s_hour + dur, b_end):
+                    return False, f"Collision: Target room {desired_room} already has another approved booking ({b['request_id']}) at this time."
+
+            # 3. Update original booking record
+            conn.execute("""
+                UPDATE booking_requests
+                SET room_id = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE request_id = ?
+            """, (desired_room, req_id))
+
+            # 4. Mark swap request as Approved
+            conn.execute("""
+                UPDATE student_swap_requests
+                SET status = 'Approved', decided_by = ?, decided_at = CURRENT_TIMESTAMP
+                WHERE swap_id = ?
+            """, (admin_username, swap_id))
+
+            conn.execute("""
+                INSERT INTO audit_logs (action, performed_by, entity_id, details)
+                VALUES ('APPROVE_STUDENT_SWAP', ?, ?, ?)
+            """, (admin_username, swap_id, f"Approved swap for booking {req_id}: {swap['current_room_id']} -> {desired_room}"))
+            conn.commit()
+
+        return True, f"Room swap approved! Booking {req_id} reassigned to Room {desired_room}."
+
+    def reject_student_swap_request(
+        self,
+        swap_id: str,
+        admin_username: str,
+        reason: str = "Administrative discretion"
+    ) -> Tuple[bool, str]:
+        """Rejects a student room swap request without modifying existing room assignments."""
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM student_swap_requests WHERE swap_id = ?", (swap_id,))
+            swap = cur.fetchone()
+            if not swap:
+                return False, "Swap request not found."
+            if swap["status"] != "Pending":
+                return False, f"Swap request is already {swap['status'].lower()}."
+
+            conn.execute("""
+                UPDATE student_swap_requests
+                SET status = 'Rejected', decided_by = ?, decided_at = CURRENT_TIMESTAMP
+                WHERE swap_id = ?
+            """, (admin_username, swap_id))
+
+            conn.execute("""
+                INSERT INTO audit_logs (action, performed_by, entity_id, details)
+                VALUES ('REJECT_STUDENT_SWAP', ?, ?, ?)
+            """, (admin_username, swap_id, f"Rejected swap request {swap_id}. Reason: {reason}"))
+            conn.commit()
+
+        return True, f"Swap request {swap_id} declined."

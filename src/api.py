@@ -6,11 +6,14 @@ Interactive Swagger documentation served automatically at /docs.
 """
 
 import os
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, status, Query, Body, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 from src.database import CampusDatabase
 from src.data_loader import DataLoader
@@ -18,6 +21,7 @@ from src.ingestion import DataIngestionService
 from src.reallocation_engine import ReallocationEngine
 from src.availability import AvailabilityEngine
 from src.priority import infer_priority_tier, PriorityTier, PRIORITY_WEIGHTS
+from src.ml_model import DemandForecaster
 
 
 app = FastAPI(
@@ -49,6 +53,9 @@ requests_df = datasets["room_requests"]
 avail_engine = AvailabilityEngine(sched_df, events_df, rooms_df)
 ingest_service = DataIngestionService(database=db, existing_rooms=set(rooms_df["room_id"]))
 realloc_engine = ReallocationEngine(rooms_df, sched_df, events_df, database=db)
+
+model_path = ROOT_DIR / "data" / "demand_forecast_model.json"
+ml_forecaster = DemandForecaster(model_path=str(model_path) if model_path.exists() else None)
 
 
 # -----------------------------------------------------------------------------
@@ -84,6 +91,13 @@ class BookingCreateRequest(BaseModel):
     computers_required: bool = False
     accessible_required: bool = False
     auto_approve: bool = False
+
+
+class StudentSwapRequestPayload(BaseModel):
+    request_id: str = Field(..., example="K-REQ-0001")
+    username: str = Field(..., example="student")
+    desired_room_id: str = Field(..., example="R008")
+    reason: str = Field(default="Need different room size or equipment", example="Attendance increased")
 
 
 class ReallocationPlanRequest(BaseModel):
@@ -304,3 +318,88 @@ def cancel_booking(request_id: str, username: str = Body(..., embed=True)):
     if not success:
         raise HTTPException(status_code=400, detail=msg)
     return {"request_id": request_id, "status": "Cancelled", "message": msg}
+
+
+# -----------------------------------------------------------------------------
+# 5. STUDENT ROOM SWAP WORKFLOW
+# -----------------------------------------------------------------------------
+
+@app.post("/api/swaps/request", tags=["Swaps"])
+def request_student_swap(payload: StudentSwapRequestPayload):
+    """
+    Allows a student to request swapping their booking to another room.
+    The request is automatically evaluated in real time by the ML demand forecast model.
+    """
+    user_bookings = db.get_user_bookings(payload.username)
+    matched = user_bookings[user_bookings["request_id"] == payload.request_id]
+    if matched.empty:
+        raise HTTPException(status_code=404, detail="Booking request not found or not owned by student.")
+
+    booking = matched.iloc[0]
+    if booking["status"] not in ("Pending", "Approved"):
+        raise HTTPException(status_code=400, detail=f"Cannot swap a {booking['status'].lower()} booking.")
+
+    current_room = booking["room_id"] or "Unassigned"
+    if current_room == payload.desired_room_id:
+        raise HTTPException(status_code=400, detail="Desired room is already your current room.")
+
+    # Run ML model swap evaluation
+    ts_recent = DemandForecaster.prepare_demand_series(requests_df)
+    ml_eval = ml_forecaster.evaluate_swap_request(
+        current_room_id=current_room,
+        desired_room_id=payload.desired_room_id,
+        request_date=str(booking["request_date"]),
+        start_hour=float(booking["start_hour"]),
+        duration_hours=float(booking["duration_hours"]),
+        required_capacity=int(booking["required_capacity"]),
+        reason=payload.reason,
+        rooms_df=rooms_df,
+        recent_history_df=ts_recent
+    )
+
+    swap_id = db.create_student_swap_request(
+        request_id=payload.request_id,
+        username=payload.username,
+        current_room_id=current_room,
+        desired_room_id=payload.desired_room_id,
+        request_date=str(booking["request_date"]),
+        start_hour=float(booking["start_hour"]),
+        duration_hours=float(booking["duration_hours"]),
+        required_capacity=int(booking["required_capacity"]),
+        reason=payload.reason,
+        ml_recommendation=ml_eval["recommendation"],
+        ml_reasoning=ml_eval["reasoning"],
+        predicted_demand=float(ml_eval["predicted_demand"])
+    )
+
+    return {
+        "swap_id": swap_id,
+        "status": "Pending",
+        "ml_evaluation": ml_eval,
+        "message": f"Swap request {swap_id} submitted. ML Recommendation: {ml_eval['recommendation']}."
+    }
+
+
+@app.get("/api/swaps", tags=["Swaps"])
+def get_swap_requests(username: Optional[str] = Query(None), status_filter: Optional[str] = Query(None)):
+    """Lists student room swap requests with attached ML recommendations."""
+    swaps = db.get_student_swap_requests(username=username, status_filter=status_filter)
+    return {"swap_requests": swaps}
+
+
+@app.post("/api/swaps/{swap_id}/approve", tags=["Swaps"])
+def approve_swap(swap_id: str, payload: ApprovalPayload):
+    """Admin approves a student room swap request."""
+    success, msg = db.approve_student_swap_request(swap_id, admin_username=payload.admin_username, availability_checker=avail_engine)
+    if not success:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"swap_id": swap_id, "status": "Approved", "message": msg}
+
+
+@app.post("/api/swaps/{swap_id}/reject", tags=["Swaps"])
+def reject_swap(swap_id: str, payload: RejectionPayload):
+    """Admin rejects a student room swap request."""
+    success, msg = db.reject_student_swap_request(swap_id, admin_username=payload.admin_username, reason=payload.reason)
+    if not success:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"swap_id": swap_id, "status": "Rejected", "message": msg}

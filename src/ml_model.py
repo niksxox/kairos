@@ -293,3 +293,79 @@ class DemandForecaster:
             "historical_mean_baseline": round(avg_demand, 1),
             "demand_intensity": "High" if pred >= 4.5 else ("Moderate" if pred >= 2.5 else "Low")
         }
+
+    def evaluate_swap_request(
+        self,
+        current_room_id: str,
+        desired_room_id: str,
+        request_date: str,
+        start_hour: float,
+        duration_hours: float,
+        required_capacity: int,
+        reason: str,
+        rooms_df: pd.DataFrame,
+        recent_history_df: Optional[pd.DataFrame] = None
+    ) -> Dict[str, Any]:
+        """
+        Evaluates whether a student room swap request is mathematically and operationally recommended
+        based on ML demand predictions for the targeted date/hour, capacity fit, and seat optimization.
+        """
+        pred_res = self.predict_slot(request_date, int(start_hour), recent_history_df=recent_history_df)
+        pred_demand = pred_res.get("predicted_requests", 3.3)
+        intensity = pred_res.get("demand_intensity", "Moderate")
+
+        # Lookup room capacities
+        curr_rm = rooms_df[rooms_df["room_id"] == current_room_id]
+        dest_rm = rooms_df[rooms_df["room_id"] == desired_room_id]
+
+        curr_cap = int(curr_rm["capacity"].iloc[0]) if not curr_rm.empty else 40
+        dest_cap = int(dest_rm["capacity"].iloc[0]) if not dest_rm.empty else 40
+
+        curr_diff = curr_cap - required_capacity
+        dest_diff = dest_cap - required_capacity
+
+        # Decision Logic based on ML forecast and space metrics
+        if required_capacity > curr_cap and dest_cap >= required_capacity:
+            recommendation = "Highly Recommended"
+            should_swap = True
+            reasoning = (
+                f"Current room {current_room_id} (seats {curr_cap}) cannot fit the group ({required_capacity} attendees). "
+                f"Moving to room {desired_room_id} (seats {dest_cap}) resolves overcrowding."
+            )
+        elif curr_diff >= 40 and 0 <= dest_diff < curr_diff and pred_demand >= 3.5:
+            recommendation = "Highly Recommended"
+            should_swap = True
+            reasoning = (
+                f"Peak demand predicted (~{pred_demand:.1f} requests/hr). Moving group to room {desired_room_id} "
+                f"frees high-capacity room {current_room_id} (seats {curr_cap}) for anticipated lectures, saving {curr_diff - dest_diff} empty seats."
+            )
+        elif dest_diff < 0:
+            recommendation = "Not Recommended"
+            should_swap = False
+            reasoning = f"Desired room {desired_room_id} (seats {dest_cap}) cannot accommodate {required_capacity} attendees."
+        elif dest_diff >= 60 and curr_diff < 30 and pred_demand >= 4.0:
+            recommendation = "Not Recommended"
+            should_swap = False
+            reasoning = (
+                f"High campus demand anticipated (~{pred_demand:.1f} requests/hr). Assigning large room {desired_room_id} (seats {dest_cap}) "
+                f"to a group of {required_capacity} would create severe capacity waste ({dest_diff} empty seats)."
+            )
+        else:
+            recommendation = "Feasible / Neutral"
+            should_swap = True
+            reasoning = (
+                f"Moderate campus demand anticipated (~{pred_demand:.1f} requests/hr). Both rooms meet requirements "
+                f"(Room {desired_room_id} has {dest_cap} seats, surplus of {dest_diff} seats). Swap can be granted."
+            )
+
+        return {
+            "recommendation": recommendation,
+            "should_swap": should_swap,
+            "predicted_demand": pred_demand,
+            "demand_intensity": intensity,
+            "current_room_capacity": curr_cap,
+            "desired_room_capacity": dest_cap,
+            "seat_waste_difference": curr_diff - dest_diff,
+            "reasoning": reasoning
+        }
+

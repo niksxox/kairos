@@ -543,19 +543,77 @@ elif page == "My Reservations":
 
         active_ids = bookings[bookings["status"].isin(["Pending", "Approved"])]["request_id"].tolist()
         if active_ids:
-            st.write("**Cancel a Reservation:**")
-            col_c1, col_c2 = st.columns([2, 1])
-            with col_c1:
-                target_cancel = st.selectbox("Select Booking to Cancel", active_ids)
-            with col_c2:
-                st.write("")
-                if st.button("Cancel Selected Booking"):
-                    ok, msg = db.cancel_booking(target_cancel, user["username"])
-                    if ok:
-                        st.success(f"Reservation {target_cancel} has been cancelled.")
+            col_act1, col_act2 = st.columns(2)
+            with col_act1:
+                with st.expander("Request Room Swap / Change"):
+                    swap_target_id = st.selectbox("Select Booking to Swap", active_ids, key="swap_sel_id")
+                    target_row = bookings[bookings["request_id"] == swap_target_id].iloc[0]
+                    curr_rm = str(target_row["room_id"] or "Unassigned")
+                    st.caption(f"Current: Room {curr_rm} on {target_row['request_date']} at {int(target_row['start_hour']):02d}:00 (Seats {target_row['required_capacity']})")
+
+                    room_choices = [r for r in sorted(rooms_df["room_id"].unique()) if r != curr_rm]
+                    desired_rm = st.selectbox("Desired Room to Move Into", room_choices, key="swap_dest_rm")
+                    swap_reason = st.text_input("Reason for Swap", value="Expected group attendance increased", key="swap_reason_inp")
+
+                    if st.button("Submit Swap Request for Review", type="primary"):
+                        ts_recent = DemandForecaster.prepare_demand_series(reqs_df)
+                        ml_eval = ml_forecaster.evaluate_swap_request(
+                            current_room_id=curr_rm,
+                            desired_room_id=desired_rm,
+                            request_date=str(target_row["request_date"]),
+                            start_hour=float(target_row["start_hour"]),
+                            duration_hours=float(target_row["duration_hours"]),
+                            required_capacity=int(target_row["required_capacity"]),
+                            reason=swap_reason,
+                            rooms_df=rooms_df,
+                            recent_history_df=ts_recent
+                        )
+                        swap_id = db.create_student_swap_request(
+                            request_id=swap_target_id,
+                            username=user["username"],
+                            current_room_id=curr_rm,
+                            desired_room_id=desired_rm,
+                            request_date=str(target_row["request_date"]),
+                            start_hour=float(target_row["start_hour"]),
+                            duration_hours=float(target_row["duration_hours"]),
+                            required_capacity=int(target_row["required_capacity"]),
+                            reason=swap_reason,
+                            ml_recommendation=ml_eval["recommendation"],
+                            ml_reasoning=ml_eval["reasoning"],
+                            predicted_demand=float(ml_eval["predicted_demand"])
+                        )
+                        st.success(f"Swap request submitted (ID: {swap_id})! AI Demand Evaluation: {ml_eval['recommendation']}. Campus admin will review your swap.")
                         st.rerun()
-                    else:
-                        st.error(msg)
+
+            with col_act2:
+                with st.expander("Cancel an Active Reservation"):
+                    target_cancel = st.selectbox("Select Booking to Cancel", active_ids, key="cancel_sel_id")
+                    if st.button("Confirm Cancellation"):
+                        ok, msg = db.cancel_booking(target_cancel, user["username"])
+                        if ok:
+                            st.success(f"Reservation {target_cancel} has been cancelled.")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+        # Show student's submitted swap requests
+        user_swaps = db.get_student_swap_requests(username=user["username"])
+        if user_swaps:
+            st.markdown("---")
+            st.write("**My Submitted Swap Requests:**")
+            swap_display = []
+            for sw in user_swaps:
+                swap_display.append({
+                    "Swap ID": sw["swap_id"],
+                    "Booking ID": sw["request_id"],
+                    "Move": f"{sw['current_room_id']} -> {sw['desired_room_id']}",
+                    "Date": sw["request_date"],
+                    "Time": f"{int(sw['start_hour']):02d}:00 ({sw['duration_hours']} hrs)",
+                    "AI Analysis": sw.get("ml_recommendation", "Neutral"),
+                    "Status": sw["status"],
+                    "Reason": sw["reason"]
+                })
+            st.dataframe(pd.DataFrame(swap_display), use_container_width=True, hide_index=True)
 
 
 # -----------------------------------------------------------------------------
@@ -670,67 +728,136 @@ elif page == "Auto-Assign Rooms":
 # 6. SMART ROOM SWAPS (ADMIN ONLY)
 # -----------------------------------------------------------------------------
 elif page == "Smart Room Swaps":
-    render_header("Smart Room Swaps", "Solve space bottlenecks by swapping rooms between scheduled events without disrupting classes.")
+    render_header("Smart Room Swaps", "Evaluate student room swap requests using AI demand forecasting and resolve space bottlenecks.")
 
-    st.write("When a large class or exam needs a bigger room that is occupied by a smaller group, this tool finds a swap so every group gets a room that fits.")
+    tab_student_swaps, tab_auto_swaps = st.tabs(["Student Swap Requests (ML Analyzed)", "Campus-Wide Swap Engine"])
 
-    r_c1, r_c2 = st.columns([2, 1])
-    with r_c1:
-        swap_date = st.date_input("Date to Check", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
-    with r_c2:
-        swap_max = st.slider("Maximum Swap Suggestions", 2, 8, 4)
+    with tab_student_swaps:
+        st.write("Students can request to swap rooms. The ML model predicts hourly demand and capacity fit to advise administrators whether the swap is recommended.")
 
-    swap_date_str = swap_date.strftime("%Y-%m-%d")
+        all_swaps = db.get_student_swap_requests()
+        if not all_swaps:
+            st.info("No student room swap requests currently in the system.")
+        else:
+            pending_swaps = [s for s in all_swaps if s["status"] == "Pending"]
+            decided_swaps = [s for s in all_swaps if s["status"] != "Pending"]
 
-    if st.button("Scan for Room Swap Opportunities", type="primary"):
-        day_unallocated = reqs_df[reqs_df["request_date"] == swap_date_str].head(8)
-        proposals = realloc_engine.generate_all_proposals(
-            date_str=swap_date_str,
-            unallocated_requests=day_unallocated,
-            max_proposals=swap_max
-        )
-        st.write(f"Found {len(proposals)} swap opportunities.")
+            st.write(f"**Pending Student Swap Requests ({len(pending_swaps)} awaiting review):**")
+            if not pending_swaps:
+                st.write("All student room swap requests have been reviewed!")
+            else:
+                for sw in pending_swaps:
+                    sw_id = sw["swap_id"]
+                    rec = sw.get("ml_recommendation", "Neutral")
+                    badge_cls = "tag-approved" if ("Highly" in rec or ("Recommended" in rec and "Not" not in rec)) else ("tag-rejected" if "Not" in rec else "tag-high")
 
-    stored = db.get_reallocation_proposals()
-    if not stored:
-        st.info("No room swap proposals in the system. Click 'Scan for Room Swap Opportunities' above to check.")
-    else:
-        st.write(f"**Room Swap Opportunities ({len(stored)}):**")
-        for p in stored:
-            p_id = p["proposal_id"]
-            stat = p["status"]
+                    st.markdown(f"""
+                    <div class="card-box">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-weight:600; font-size:1rem; color:#0f172a;">Swap #{sw_id} &bull; Booking #{sw['request_id']} by <em>{sw['username']}</em></span>
+                            <span class="tag {badge_cls}">AI: {rec}</span>
+                        </div>
+                        <div style="font-size:0.85rem; color:#475569; margin-top:0.35rem;">
+                            Move: <strong>Room {sw['current_room_id']}</strong> &rarr; <strong>Room {sw['desired_room_id']}</strong> &nbsp;|&nbsp;
+                            Date: <strong>{sw['request_date']}</strong> &nbsp;|&nbsp;
+                            Time: <strong>{int(sw['start_hour']):02d}:00 ({sw['duration_hours']} hrs)</strong> &nbsp;|&nbsp;
+                            Group: <strong>{sw['required_capacity']} people</strong>
+                        </div>
+                        <div style="font-size:0.82rem; color:#334155; margin-top:0.35rem;">
+                            Student Reason: <em>"{sw['reason']}"</em>
+                        </div>
+                        <div style="margin-top:0.45rem; padding:0.45rem 0.65rem; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; font-size:0.8rem; color:#1e293b;">
+                            <strong>AI Demand Forecast:</strong> ~{sw.get('predicted_demand', 3.3):.1f} requests/hr anticipated during this time slot.<br/>
+                            <strong>AI Space Reasoning:</strong> {sw.get('ml_reasoning', 'No reasoning available.')}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            st.write(f"**Swap Plan #{p_id}** — {p['summary']} (Status: `{stat}`)")
-            if p["items"]:
-                swap_df = pd.DataFrame(p["items"]).rename(columns={
-                    "title": "Event Name",
-                    "current_room_id": "Current Room",
-                    "proposed_room_id": "Move To Room",
-                    "event_date": "Date",
-                    "start_hour": "Start Hour",
-                    "duration_hours": "Duration (hrs)"
-                })
-                st.dataframe(swap_df[["Event Name", "Current Room", "Move To Room", "Date", "Start Hour", "Duration (hrs)"]], use_container_width=True, hide_index=True)
+                    c_app, c_rej, _ = st.columns([1, 1, 4])
+                    with c_app:
+                        if st.button("Approve Swap", key=f"app_sw_{sw_id}", type="primary"):
+                            ok, msg = db.approve_student_swap_request(sw_id, user["username"], avail_engine)
+                            if ok:
+                                st.success(f"Swap #{sw_id} approved! Booking updated to Room {sw['desired_room_id']}.")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with c_rej:
+                        if st.button("Decline Swap", key=f"rej_sw_{sw_id}"):
+                            ok, msg = db.reject_student_swap_request(sw_id, user["username"], reason="Administrative space prioritization")
+                            if ok:
+                                st.warning(f"Swap #{sw_id} declined.")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    st.markdown("---")
 
-            if stat == "Pending":
-                b1, b2, _ = st.columns([1, 1, 4])
-                with b1:
-                    if st.button(f"Approve Swap {p_id}", key=f"app_{p_id}"):
-                        ok, msg = db.approve_reallocation_proposal(p_id, user["username"], avail_engine)
-                        if ok:
-                            st.success(f"Swap plan #{p_id} approved. Room schedules updated.")
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                with b2:
-                    if st.button(f"Decline Swap {p_id}", key=f"rej_{p_id}"):
-                        ok, msg = db.reject_reallocation_proposal(p_id, user["username"])
-                        if ok:
-                            st.warning(f"Swap plan #{p_id} declined.")
-                            st.rerun()
-                        else:
-                            st.error(msg)
-            st.markdown("---")
+            if decided_swaps:
+                with st.expander(f"Review Decided Swap History ({len(decided_swaps)} past requests)"):
+                    st.dataframe(pd.DataFrame(decided_swaps)[[
+                        "swap_id", "request_id", "username", "current_room_id", "desired_room_id", "request_date", "status", "decided_by", "ml_recommendation"
+                    ]], use_container_width=True, hide_index=True)
+
+    with tab_auto_swaps:
+        st.write("When a large class or exam needs a bigger room that is occupied by a smaller group, this tool finds a swap so every group gets a room that fits.")
+
+        r_c1, r_c2 = st.columns([2, 1])
+        with r_c1:
+            swap_date = st.date_input("Date to Check", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
+        with r_c2:
+            swap_max = st.slider("Maximum Swap Suggestions", 2, 8, 4)
+
+        swap_date_str = swap_date.strftime("%Y-%m-%d")
+
+        if st.button("Scan for Room Swap Opportunities", type="primary"):
+            day_unallocated = reqs_df[reqs_df["request_date"] == swap_date_str].head(8)
+            proposals = realloc_engine.generate_all_proposals(
+                date_str=swap_date_str,
+                unallocated_requests=day_unallocated,
+                max_proposals=swap_max
+            )
+            st.write(f"Found {len(proposals)} swap opportunities.")
+
+        stored = db.get_reallocation_proposals()
+        if not stored:
+            st.info("No automated swap proposals currently in the system. Click 'Scan for Room Swap Opportunities' above to check.")
+        else:
+            st.write(f"**Automated Swap Proposals ({len(stored)}):**")
+            for p in stored:
+                p_id = p["proposal_id"]
+                stat = p["status"]
+
+                st.write(f"**Swap Plan #{p_id}** — {p['summary']} (Status: `{stat}`)")
+                if p["items"]:
+                    swap_df = pd.DataFrame(p["items"]).rename(columns={
+                        "title": "Event Name",
+                        "current_room_id": "Current Room",
+                        "proposed_room_id": "Move To Room",
+                        "event_date": "Date",
+                        "start_hour": "Start Hour",
+                        "duration_hours": "Duration (hrs)"
+                    })
+                    st.dataframe(swap_df[["Event Name", "Current Room", "Move To Room", "Date", "Start Hour", "Duration (hrs)"]], use_container_width=True, hide_index=True)
+
+                if stat == "Pending":
+                    b1, b2, _ = st.columns([1, 1, 4])
+                    with b1:
+                        if st.button(f"Approve Swap {p_id}", key=f"app_{p_id}"):
+                            ok, msg = db.approve_reallocation_proposal(p_id, user["username"], avail_engine)
+                            if ok:
+                                st.success(f"Swap plan #{p_id} approved. Room schedules updated.")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with b2:
+                        if st.button(f"Decline Swap {p_id}", key=f"rej_{p_id}"):
+                            ok, msg = db.reject_reallocation_proposal(p_id, user["username"])
+                            if ok:
+                                st.warning(f"Swap plan #{p_id} declined.")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                st.markdown("---")
 
 
 # -----------------------------------------------------------------------------
