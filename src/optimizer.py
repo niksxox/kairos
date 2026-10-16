@@ -16,6 +16,7 @@ except ImportError:
     ORTOOLS_AVAILABLE = False
 
 from src.availability import AvailabilityEngine, IntervalMerger
+from src.priority import infer_priority_tier, PRIORITY_WEIGHTS, PriorityTier
 
 
 class MultiEventOptimizer:
@@ -179,12 +180,16 @@ class MultiEventOptimizer:
             for r_id in shared_rooms:
                 model.Add(x[(q1, r_id)] + x[(q2, r_id)] <= 1)
 
-        # Objective Function
-        # Maximize: sum (BIG_M * x - excess_capacity * x)
+        # Objective Function (Priority-Weighted Lexicographic Objective)
+        # Maximize: sum (BIG_M * priority_weight * x - excess_capacity * x)
+        # Formal exams/tests (weight 100) are strictly prioritized over cultural events (weight 5)
         objective_terms = []
         for (q_id, r_id), var in x.items():
             wasted_seats = excess_caps[(q_id, r_id)]
-            coeff = int(self.BIG_M - wasted_seats)
+            q_purpose = req_lookup[q_id].get("purpose", "")
+            q_tier = infer_priority_tier(q_purpose)
+            p_weight = PRIORITY_WEIGHTS[q_tier]
+            coeff = int(self.BIG_M * p_weight - wasted_seats)
             objective_terms.append(coeff * var)
 
         if objective_terms:
@@ -216,6 +221,7 @@ class MultiEventOptimizer:
                     surplus = room_cap - req_cap
                     total_excess += surplus
                     allocated_req_ids.add(q_id)
+                    q_tier = infer_priority_tier(q_data.get("purpose", ""))
 
                     allocations.append({
                         "request_id": q_id,
@@ -225,6 +231,8 @@ class MultiEventOptimizer:
                         "duration_hours": q_data["duration_hours"],
                         "end_hour": q_data["start_hour"] + q_data["duration_hours"],
                         "purpose": q_data.get("purpose", "N/A"),
+                        "priority_tier": q_tier.value,
+                        "priority_score": PRIORITY_WEIGHTS[q_tier],
                         "required_capacity": req_cap,
                         "allocated_room_capacity": room_cap,
                         "excess_capacity": surplus,
@@ -301,8 +309,12 @@ class MultiEventOptimizer:
                 "hard_constraint_violations": 0
             }
 
-        # Sort requests chronologically (standard baseline practice)
-        sorted_reqs = requests_df.sort_values(by=["request_date", "start_hour", "request_id"]).copy()
+        # Sort requests by priority weight descending, then chronologically
+        sorted_reqs = requests_df.copy()
+        purposes = sorted_reqs["purpose"] if "purpose" in sorted_reqs.columns else pd.Series(["Academic"] * len(sorted_reqs), index=sorted_reqs.index)
+        sorted_reqs["priority_tier"] = purposes.apply(lambda p: infer_priority_tier(str(p)).value)
+        sorted_reqs["priority_weight"] = purposes.apply(lambda p: PRIORITY_WEIGHTS[infer_priority_tier(str(p))])
+        sorted_reqs = sorted_reqs.sort_values(by=["priority_weight", "request_date", "start_hour", "request_id"], ascending=[False, True, True, True])
         
         # Track dynamically assigned intervals per room and date: (start, end)
         dynamic_assignments: Dict[Tuple[str, str], List[Tuple[float, float]]] = {}
@@ -376,6 +388,7 @@ class MultiEventOptimizer:
                     "duration_hours": q_dur,
                     "end_hour": q_end,
                     "purpose": req.get("purpose", "N/A"),
+                    "priority_tier": infer_priority_tier(req.get("purpose", "")).value,
                     "required_capacity": q_cap,
                     "allocated_room_capacity": room_cap,
                     "excess_capacity": surplus,

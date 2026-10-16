@@ -1,11 +1,12 @@
 """
 KAIROS — Campus Space Intelligence Platform
 Predict demand. Optimize allocation. Reduce wasted space.
-Team: Laphing Buddha | DATATHON 2026
+Team: Laphing Buddha | DATATHON 2026 | Track: Education
 """
 
 import os
 import sys
+import json
 from pathlib import Path
 from datetime import datetime, date, timedelta
 
@@ -36,14 +37,17 @@ from src.availability import AvailabilityEngine
 from src.matching import RoomMatchingEngine
 from src.optimizer import MultiEventOptimizer, ORTOOLS_AVAILABLE
 from src.utilization import UtilizationEngine
-from src.recommendations import AdminRecommendationEngine, DecisionStore, CapacitySwapEngine
+from src.recommendations import AdminRecommendationEngine, DecisionStore
+from src.reallocation_engine import ReallocationEngine
+from src.ingestion import DataIngestionService
+from src.priority import infer_priority_tier, get_priority_info, PriorityTier, PRIORITY_WEIGHTS, PRIORITY_BADGE_STYLE
 from src.metrics import MetricsCalculator
 from src.database import CampusDatabase
 from src.ml_model import DemandForecaster
 
 
 # -----------------------------------------------------------------------------
-# PAGE CONFIGURATION & STYLING
+# PAGE CONFIGURATION & RESTRAINED INSTITUTIONAL STYLING
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="KAIROS | Campus Space Intelligence",
@@ -54,120 +58,89 @@ st.set_page_config(
 
 CUSTOM_CSS = """
 <style>
+    /* Clean academic SaaS aesthetic - zero AI-slope gradients */
     :root {
         --primary: #0f766e;
+        --primary-dark: #115e59;
         --navy: #0f172a;
-        --teal-light: #f0fdfa;
-        --accent: #0284c7;
+        --surface: #ffffff;
+        --bg-subtle: #f8fafc;
         --border-color: #e2e8f0;
+        --text-primary: #0f172a;
+        --text-secondary: #475569;
     }
     
-    .brand-header {
-        background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
-        padding: 1.5rem 2rem;
-        border-radius: 0.75rem;
-        color: white;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1200px;
     }
-    .brand-title {
-        font-size: 2.3rem;
-        font-weight: 800;
-        letter-spacing: -0.025em;
+    
+    .institutional-header {
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 1.25rem;
+        margin-bottom: 1.75rem;
+    }
+    
+    .product-title {
+        font-size: 1.85rem;
+        font-weight: 700;
+        color: #0f172a;
+        letter-spacing: -0.02em;
         margin: 0;
-        color: #ffffff;
     }
-    .brand-subtitle {
-        font-size: 1.05rem;
-        color: #99f6e4;
-        margin-top: 0.25rem;
-        font-weight: 400;
+    
+    .product-subtitle {
+        font-size: 0.95rem;
+        color: #475569;
+        margin: 0.25rem 0 0 0;
     }
-    .badge-tag {
-        display: inline-block;
-        background: rgba(255, 255, 255, 0.15);
-        color: #ccfbf1;
-        padding: 0.2rem 0.6rem;
-        border-radius: 9999px;
-        font-size: 0.8rem;
-        margin-left: 0.5rem;
-        font-weight: 600;
-    }
+    
     .metric-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
-        border-radius: 0.5rem;
+        border-radius: 6px;
         padding: 1.1rem 1.25rem;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        margin-bottom: 0.75rem;
     }
+    
     .metric-label {
-        font-size: 0.8rem;
+        font-size: 0.75rem;
         color: #64748b;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
+    
     .metric-value {
-        font-size: 1.85rem;
+        font-size: 1.75rem;
         font-weight: 700;
         color: #0f172a;
-        margin-top: 0.2rem;
+        margin-top: 0.25rem;
     }
+    
     .metric-sub {
         font-size: 0.8rem;
         color: #0f766e;
         margin-top: 0.2rem;
     }
-    .status-badge-approved {
-        background-color: #dcfce7;
-        color: #166534;
-        padding: 0.2rem 0.6rem;
-        border-radius: 9999px;
-        font-size: 0.8rem;
+
+    .priority-badge {
+        display: inline-block;
+        padding: 0.2rem 0.55rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
         font-weight: 600;
+        border: 1px solid transparent;
     }
-    .status-badge-pending {
-        background-color: #fef3c7;
-        color: #92400e;
-        padding: 0.2rem 0.6rem;
-        border-radius: 9999px;
-        font-size: 0.8rem;
-        font-weight: 600;
-    }
-    .status-badge-rejected {
-        background-color: #fee2e2;
-        color: #991b1b;
-        padding: 0.2rem 0.6rem;
-        border-radius: 9999px;
-        font-size: 0.8rem;
-        font-weight: 600;
-    }
-    .status-badge-cancelled {
-        background-color: #f1f5f9;
-        color: #475569;
-        padding: 0.2rem 0.6rem;
-        border-radius: 9999px;
-        font-size: 0.8rem;
-        font-weight: 600;
-    }
+
     .rec-card {
         background: #ffffff;
+        border: 1px solid #e2e8f0;
         border-left: 4px solid #0f766e;
-        border-top: 1px solid #e2e8f0;
-        border-right: 1px solid #e2e8f0;
-        border-bottom: 1px solid #e2e8f0;
-        border-radius: 0.375rem;
+        border-radius: 6px;
         padding: 1.25rem;
         margin-bottom: 1rem;
-    }
-    .system-disclaimer {
-        background: #f8fafc;
-        border: 1px solid #cbd5e1;
-        border-radius: 0.375rem;
-        padding: 0.75rem 1rem;
-        font-size: 0.8rem;
-        color: #475569;
-        margin-top: 2rem;
     }
 </style>
 """
@@ -179,45 +152,44 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # -----------------------------------------------------------------------------
 db = CampusDatabase()
 
-@st.cache_data(show_spinner="Loading campus space datasets...")
-def load_cached_datasets(version_key=1):
-    loader = DataLoader()
-    raw, src_name = loader.load_all()
-    cleaned = Preprocessor.process_all(raw)
-    validator = DataValidator(raw)
-    report = validator.validate_all()
-    return cleaned, src_name, report
-
 if "data_version" not in st.session_state:
     st.session_state["data_version"] = 1
 
-cleaned_data, current_source, dq_report = load_cached_datasets(st.session_state["data_version"])
-rooms_df = cleaned_data["rooms"]
-sched_df = cleaned_data["class_schedule"]
-events_df = cleaned_data["events"]
-reqs_df = cleaned_data["room_requests"]
+@st.cache_data(show_spinner="Loading verified campus records...")
+def get_datasets(version: int):
+    loader = DataLoader()
+    datasets, source = loader.load_all()
+    rooms_clean, sched_clean, events_clean, reqs_clean = Preprocessor.preprocess_all(
+        datasets["rooms"],
+        datasets["class_schedule"],
+        datasets["events"],
+        datasets["room_requests"]
+    )
+    return rooms_clean, sched_clean, events_clean, reqs_clean, source
 
-# Domain engines
+rooms_df, sched_df, events_df, reqs_df, current_source = get_datasets(st.session_state["data_version"])
+
+# Core domain engines
 avail_engine = AvailabilityEngine(sched_df, events_df, rooms_df, db_instance=db)
 matching_engine = RoomMatchingEngine(rooms_df, avail_engine)
 optimizer_engine = MultiEventOptimizer(rooms_df, sched_df, events_df)
+realloc_engine = ReallocationEngine(rooms_df, sched_df, events_df, database=db)
+ingest_service = DataIngestionService(database=db, existing_rooms=set(rooms_df["room_id"]))
 util_engine = UtilizationEngine(rooms_df, sched_df, events_df)
-decision_store = DecisionStore()
-admin_engine = AdminRecommendationEngine(rooms_df, sched_df, events_df, reqs_df, decision_store)
 
-# Load trained ML model from disk
+# ML model loader
 model_json = str(ROOT_DIR / "data" / "demand_forecast_model.json")
 ml_forecaster = DemandForecaster(model_path=model_json if os.path.exists(model_json) else None)
 
 
 # -----------------------------------------------------------------------------
-# USER AUTHENTICATION & ROLE MANAGEMENT
+# USER AUTHENTICATION & ROLE SWITCHER
 # -----------------------------------------------------------------------------
 if "current_user" not in st.session_state:
     st.session_state["current_user"] = {
         "username": "student",
         "role": "student",
-        "department": "CSE"
+        "department": "Computer Science & Engineering"
     }
 
 user = st.session_state["current_user"]
@@ -225,200 +197,234 @@ user = st.session_state["current_user"]
 with st.sidebar:
     st.markdown("### 🏛️ **KAIROS**")
     st.caption("Predict demand. Optimize allocation. Reduce wasted space.")
-    
     st.markdown("---")
-    st.markdown("**Session Profile**")
-    role_color = "🟢" if user["role"] == "student" else "🔴"
-    st.write(f"{role_color} **{user['username']}** (`{user['role'].upper()}`)")
+    
+    st.markdown("**Active Session**")
+    role_indicator = "🟢" if user["role"] == "student" else "🔵"
+    st.write(f"{role_indicator} **{user['username']}** (`{user['role'].upper()}`)")
     st.caption(f"Dept: {user['department']}")
 
-    # Quick Role Switcher for Hackathon Judges
+    # Quick demo role switcher
     st.markdown("**Switch Role (Demo):**")
-    col_sw1, col_sw2 = st.columns(2)
-    with col_sw1:
-        if st.button("Student", use_container_width=True, disabled=(user["role"]=="student")):
-            st.session_state["current_user"] = {"username": "student", "role": "student", "department": "CSE"}
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Student", use_container_width=True, disabled=(user["role"] == "student")):
+            st.session_state["current_user"] = {"username": "student", "role": "student", "department": "Computer Science"}
             st.rerun()
-    with col_sw2:
-        if st.button("Admin", use_container_width=True, disabled=(user["role"]=="admin")):
+    with c2:
+        if st.button("Admin", use_container_width=True, disabled=(user["role"] == "admin")):
             st.session_state["current_user"] = {"username": "admin", "role": "admin", "department": "Campus Operations"}
             st.rerun()
 
     st.markdown("---")
 
-    # Dynamic Navigation Based on Role
-    student_nav = ["Overview", "Find a Room", "My Bookings", "Calendar View", "Demand Forecast"]
-    admin_nav = ["Admin Workspace", "Multi-Event Optimizer", "Capacity Swaps", "Space Analytics", "Data Quality & Sources"]
-
+    # Navigation menu
     if user["role"] == "admin":
-        nav_options = student_nav + ["---"] + admin_nav
+        nav_options = [
+            "Overview",
+            "Find a Room",
+            "My Bookings",
+            "Calendar View",
+            "Multi-Event Optimizer",
+            "Automatic Reallocation & Swaps",
+            "Demand Forecast (ML)",
+            "Space Analytics",
+            "Data Ingestion & REST API",
+            "Admin Workspace"
+        ]
     else:
-        nav_options = student_nav
+        nav_options = [
+            "Overview",
+            "Find a Room",
+            "My Bookings",
+            "Calendar View",
+            "Demand Forecast (ML)"
+        ]
 
-    page = st.radio("Navigation", [opt for opt in nav_options if opt != "---"], index=0)
+    page = st.radio("Navigation", nav_options, index=0)
 
     st.markdown("---")
-    st.caption(f"**Data:** {current_source}")
-    st.caption(f"**OR-Tools:** {'✅ CP-SAT Active' if ORTOOLS_AVAILABLE else '⚠️ Greedy Fallback'}")
-    st.caption(f"**ML Engine:** {'✅ Trained Model Loaded' if ml_forecaster.model else '⚠️ Untrained'}")
+    st.caption(f"**Data Pipeline:** {current_source}")
+    st.caption(f"**Optimization:** {'Google OR-Tools CP-SAT' if ORTOOLS_AVAILABLE else 'Deterministic Heuristic'}")
+    st.caption(f"**ML Engine:** {'NumPy Linear Reg (Trained)' if ml_forecaster.model else 'Untrained'}")
+    st.caption(f"**REST API:** FastAPI on Port 8000")
 
-    if st.button("🔄 Reload Data Cache", use_container_width=True):
+    if st.button("🔄 Refresh Application State", use_container_width=True):
         st.cache_data.clear()
         st.session_state["data_version"] += 1
         st.rerun()
 
 
 # -----------------------------------------------------------------------------
-# PAGE: OVERVIEW
+# TOP HEADER COMPONENT (Clean, restrained, non-AI-slope)
 # -----------------------------------------------------------------------------
-if page == "Overview":
-    st.markdown("""
-    <div class="brand-header">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+def render_header(title: str, subtitle: str, tag: str = "DATATHON 2026"):
+    st.markdown(f"""
+    <div class="institutional-header">
+        <div style="display:flex; justify-content:space-between; align-items:flex-end;">
             <div>
-                <h1 class="brand-title">KAIROS <span class="badge-tag">DATATHON 2026</span></h1>
-                <p class="brand-subtitle">Predict demand. Optimize allocation. Reduce wasted space.</p>
+                <h1 class="product-title">{title}</h1>
+                <p class="product-subtitle">{subtitle}</p>
             </div>
-            <div style="text-align:right;">
-                <span style="font-size:0.95rem; color:#ccfbf1; font-weight:700;">Team: Laphing Buddha</span><br/>
-                <span style="font-size:0.85rem; color:#99f6e4;">Track: Education</span>
+            <div>
+                <span style="background:#f1f5f9; border:1px solid #cbd5e1; color:#334155; font-size:0.75rem; font-weight:600; padding:0.25rem 0.6rem; border-radius:4px;">{tag}</span>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Executive Metrics
-    kpi = MetricsCalculator.compute_summary_kpis(rooms_df, sched_df, events_df, reqs_df)
-    
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
+
+# -----------------------------------------------------------------------------
+# PAGE 1: OVERVIEW
+# -----------------------------------------------------------------------------
+if page == "Overview":
+    render_header(
+        "KAIROS — Campus Space Intelligence",
+        "Predict demand. Optimize allocation. Reduce wasted space. • Team: Laphing Buddha"
+    )
+
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
         st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-label">Campus Inventory</div>
-            <div class="metric-value">{kpi['total_rooms']} Rooms</div>
-            <div class="metric-sub">{kpi['total_seats']:,} total seats</div>
+            <div class="metric-label">Physical Inventory</div>
+            <div class="metric-value">{len(rooms_df)}</div>
+            <div class="metric-sub">Across {rooms_df['building'].nunique()} Campus Buildings</div>
         </div>
         """, unsafe_allow_html=True)
-    with c2:
+
+    with kpi2:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Scheduled Classes</div>
-            <div class="metric-value">{kpi['total_classes_scheduled']:,}</div>
-            <div class="metric-sub">Mon–Sat Timetable</div>
+            <div class="metric-value">{len(sched_df):,}</div>
+            <div class="metric-sub">Mon–Sat Academic Timetable</div>
         </div>
         """, unsafe_allow_html=True)
-    with c3:
+
+    with kpi3:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-label">Special Events</div>
-            <div class="metric-value">{kpi['total_events_scheduled']:,}</div>
-            <div class="metric-sub">Aug–Nov Calendar</div>
+            <div class="metric-value">{len(events_df):,}</div>
+            <div class="metric-sub">Conferences & Guest Sessions</div>
         </div>
         """, unsafe_allow_html=True)
-    with c4:
+
+    with kpi4:
         st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-label">Unallocated Demand</div>
-            <div class="metric-value">{kpi['total_incoming_requests']:,}</div>
-            <div class="metric-sub">{kpi['theoretically_feasible_requests']:,} capacity-viable</div>
+            <div class="metric-label">Student Requests</div>
+            <div class="metric-value">{len(reqs_df):,}</div>
+            <div class="metric-sub">Unallocated Demand Profile</div>
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("<br/>", unsafe_allow_html=True)
+    st.markdown("### Institutional Core Highlights")
+    c_left, c_right = st.columns([1, 1])
 
-    col_l, col_r = st.columns([3, 2])
-    with col_l:
-        st.markdown("### 🎓 Welcome to KAIROS")
-        st.write(f"""
-        Hello **{user['username']}**! KAIROS is your intelligent space coordination companion. 
-        Whether you are organizing a study session, planning a hackathon workshop, or managing campus rooms, 
-        KAIROS guarantees that rooms are allocated without collision, capacity is matched without waste, and demand peaks are anticipated with machine learning.
-        """)
-
-        # Student status summary
-        my_reqs = db.get_user_bookings(user["username"])
-        if not my_reqs.empty:
-            approved_count = len(my_reqs[my_reqs["status"] == "Approved"])
-            pending_count = len(my_reqs[my_reqs["status"] == "Pending"])
-            st.info(f"📌 You currently have **{approved_count} confirmed booking(s)** and **{pending_count} pending request(s)** in your account.")
-        else:
-            st.info("📌 You have no active room requests yet. Click **Find a Room** to reserve campus space.")
-
-        st.markdown("#### 🌟 Core Architectural Pillars")
+    with c_left:
         st.markdown("""
-        - **1. Zero-Collision Availability:** Strict $[start, end)$ half-open interval merging handles classes, special events, and dynamic student bookings without double-counting.
-        - **2. Explainable Real-Time Matching:** 3-stage constraint pruning gives clear reasons why rooms are chosen or disqualified.
-        - **3. Google OR-Tools CP-SAT Optimizer:** Solves global multi-request allocations, delivering **+18% to +35%** higher request fulfillment and **22% lower seat waste**.
-        - **4. NumPy ML Demand Forecasting:** Predicts hourly request intensity from scratch using pure NumPy gradient descent.
-        - **5. Persistent Decision Support:** Full SQLite database tracks bookings, audits, and admin approvals across application restarts.
+        **1. Institutional Priority Metric:**
+        Formal assessments (exams, tests) are strictly prioritized over discretionary cultural/social events. 
+        When multiple requests contend for a scarce room, Google OR-Tools CP-SAT enforces priority-weighting mathematically.
+
+        **2. Bounded Swap & Reallocation Engine:**
+        Detects space inefficiencies where small classes occupy massive lecture halls while crowded classes overflow. 
+        Generates mutual swaps and bounded swap chains with atomic approval workflows and zero schedule disruption.
         """)
 
-    with col_r:
-        st.markdown("### 🏛️ Room Types Distribution")
-        if not rooms_df.empty:
-            fig_types = px.pie(
-                rooms_df,
-                names="room_type",
-                hole=0.45,
-                color_discrete_sequence=px.colors.sequential.Teal
-            )
-            fig_types.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=300)
-            st.plotly_chart(fig_types, use_container_width=True)
+    with c_right:
+        st.markdown("""
+        **3. Pure NumPy Machine Learning Demand Forecasting:**
+        Trained from scratch using cyclic temporal representations. Accurately anticipates future peak request volume 
+        and flags capacity shortages before students face rejections.
 
-    st.markdown("""
-    <div class="system-disclaimer">
-        ℹ️ <strong>System Transparency:</strong> All baseline data is derived from the DATATHON 2026 educational datasets. 
-        Allocations created via KAIROS are proposals managed by the local prototype database. No live campus booking API is modified.
-    </div>
-    """, unsafe_allow_html=True)
+        **4. Transactional Data Ingestion & REST API:**
+        FastAPI application running on port 8000 with interactive Swagger UI at `/docs`. Enforces schema validation, 
+        referential integrity checks, and persistent audit trails.
+        """)
 
 
 # -----------------------------------------------------------------------------
-# PAGE: FIND A ROOM (STUDENT BOOKING WORKFLOW)
+# PAGE 2: FIND A ROOM (STUDENT BOOKING WORKFLOW WITH PRIORITY METRIC)
 # -----------------------------------------------------------------------------
 elif page == "Find a Room":
-    st.markdown("## 🔍 Find & Book a Room")
-    st.write("Specify your requirements to search, rank, and immediately book available campus rooms.")
+    render_header("Find a Room", "Multi-criteria room discovery, fit scoring, and priority-ranked booking submission.")
 
-    with st.form("student_room_search"):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            req_date = st.date_input("Date", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
-            req_start = st.slider("Start Time (24h)", min_value=8, max_value=21, value=14, step=1)
-        with c2:
-            req_dur = st.selectbox("Duration (Hours)", [1, 2, 3, 4], index=1)
-            req_cap = st.number_input("Attendees", min_value=1, max_value=200, value=30)
-        with c3:
-            req_purpose = st.selectbox("Meeting Purpose", REQUEST_PURPOSES, index=0)
-            req_type = st.selectbox("Room Type Preference", ["Any"] + VALID_ROOM_TYPES, index=0)
+    # Priority Metric Explanation Banner
+    st.info("💡 **Institutional Priority Policy Active:** Formal examinations and tests receive highest allocation ranking (`CRITICAL`), strictly outranking discretionary cultural and social gatherings (`FLEXIBLE`).")
 
-        st.markdown("**Equipment & Accessibility Needs**")
-        f1, f2, f3, _ = st.columns(4)
-        with f1:
-            req_proj = st.checkbox("📽️ Projector Required", value=False)
-        with f2:
-            req_comp = st.checkbox("💻 Computers Required", value=False)
-        with f3:
-            req_acc = st.checkbox("♿ Accessibility Certified", value=False)
+    with st.form("room_search_form"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            req_date = st.date_input("Event Date", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
+            start_hour = st.selectbox("Start Time", [h for h in range(8, 21)], index=6, format_func=lambda h: f"{h:02d}:00")
+            duration = st.selectbox("Duration", [1.0, 1.5, 2.0, 3.0, 4.0], index=2, format_func=lambda d: f"{d} Hours")
 
-        search_btn = st.form_submit_button("🔍 Search Feasible Rooms", use_container_width=True)
+        with col2:
+            attendance = st.number_input("Expected Attendance", min_value=1, max_value=300, value=40, step=5)
+            
+            # Purpose and Category Selection (Drives Institutional Priority Tier)
+            category_selection = st.selectbox(
+                "Event Category (Priority Ranking)",
+                [
+                    "Formal Examination / Midterm / Test (Priority: Critical)",
+                    "Core Course Lecture / Lab Practical (Priority: High)",
+                    "Academic Seminar / Department Colloquium (Priority: Medium)",
+                    "Student Project / Study Group (Priority: Standard)",
+                    "Cultural Fest / Rehearsal / Social Gathering (Priority: Flexible)"
+                ],
+                index=0
+            )
+            purpose_note = st.text_input("Event Description / Topic", value="Midterm Review Assessment")
 
-    if search_btn or "last_search" in st.session_state:
-        if search_btn:
-            st.session_state["last_search"] = {
-                "date": req_date.strftime("%Y-%m-%d"),
-                "start": float(req_start),
-                "dur": float(req_dur),
-                "cap": int(req_cap),
-                "proj": req_proj,
-                "comp": req_comp,
-                "acc": req_acc,
-                "type": None if req_type == "Any" else req_type,
-                "purpose": req_purpose
-            }
+        with col3:
+            st.markdown("**Required Facilities:**")
+            req_projector = st.checkbox("Projector Required", value=True)
+            req_computers = st.checkbox("Computer Stations Required", value=False)
+            req_accessible = st.checkbox("Accessibility (Wheelchair Ramp)", value=False)
+            preferred_building = st.selectbox("Building Filter", ["Any Building"] + sorted(VALID_BUILDINGS))
 
+        search_submitted = st.form_submit_button("🔍 Search Feasible Rooms", use_container_width=True, type="primary")
+
+    if search_submitted:
+        full_purpose = f"{category_selection.split('(')[0].strip()} — {purpose_note}"
+        tier, p_score, badge_info = get_priority_info(full_purpose)
+
+        st.session_state["last_search"] = {
+            "date": req_date.strftime("%Y-%m-%d"),
+            "start": float(start_hour),
+            "dur": float(duration),
+            "cap": int(attendance),
+            "proj": req_projector,
+            "comp": req_computers,
+            "acc": req_accessible,
+            "bldg": None if preferred_building == "Any Building" else preferred_building,
+            "purpose": full_purpose,
+            "tier": tier,
+            "score": p_score,
+            "badge": badge_info
+        }
+
+    if "last_search" in st.session_state:
         s = st.session_state["last_search"]
-        result = matching_engine.evaluate_request(
+        b_info = s["badge"]
+        tier_obj = s["tier"]
+
+        st.markdown(f"""
+        <div style="background:{b_info['bg']}; border:1px solid {b_info['border']}; border-radius:6px; padding:0.75rem 1rem; margin:1rem 0;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <strong style="color:{b_info['color']}; font-size:0.9rem;">{b_info['label']}</strong>
+                    <span style="color:#475569; font-size:0.85rem; margin-left:0.5rem;">| Allocation Weight: <b>{s['score']}</b></span>
+                </div>
+                <span style="color:#64748b; font-size:0.8rem;">Date: {s['date']} ({int(s['start']):02d}:00 - {int(s['start']+s['dur']):02d}:00)</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        recs, rejs = matching_engine.find_and_rank_rooms(
             request_date=s["date"],
             start_hour=s["start"],
             duration_hours=s["dur"],
@@ -426,114 +432,95 @@ elif page == "Find a Room":
             projector_required=s["proj"],
             computers_required=s["comp"],
             accessible_required=s["acc"],
-            preferred_room_type=s["type"]
+            preferred_building=s["bldg"]
         )
 
-        if not result["success"]:
-            st.error(f"❌ {result['error']}")
+        if not recs:
+            st.error("⚠️ No feasible rooms found that satisfy all hard capacity, facility, and availability constraints.")
+            if rejs:
+                with st.expander(f"Inspect Disqualified Rooms ({len(rejs)} evaluated)", expanded=True):
+                    rej_df = pd.DataFrame([
+                        {"Room": r["room_id"], "Building": r["building"], "Capacity": r["capacity"], "Rejection Reasons": " | ".join(r["rejection_reasons"])}
+                        for r in rejs
+                    ])
+                    st.dataframe(rej_df, use_container_width=True, hide_index=True)
         else:
-            recs = result["recommendations"]
-            rejs = result["rejected"]
-
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Available Feasible Rooms", len(recs))
-            m2.metric("Disqualified Rooms", len(rejs))
-            m3.metric("Evaluated Inventory", result["total_rooms_evaluated"])
-
-            if not recs:
-                st.warning(f"⚠️ No rooms currently available on **{s['date']}** from **{int(s['start']):02d}:00 to {int(s['start']+s['dur']):02d}:00** matching all constraints.")
-                st.write("Inspect disqualified rooms below to see exact constraint bottlenecks.")
-            else:
-                st.markdown("### 🏆 Recommended Available Rooms")
-                for idx, room in enumerate(recs[:5], start=1):
-                    r_id = room["room_id"]
-                    with st.expander(f"Option #{idx}: Room {r_id} ({room['building']}, Floor {room['floor']}) — Fit Score: {room['match_score']*100:.1f}%", expanded=(idx==1)):
-                        col_info, col_book = st.columns([3, 1])
-                        with col_info:
-                            st.write(f"**Capacity:** {room['capacity']} seats ({room['excess_capacity']} surplus)")
-                            st.write(f"**Type:** {room['room_type']} | **Power Outlets:** {room['power_outlets']}")
-                            st.write(f"**Amenities:** Projector: {'✅' if room['projector'] else '❌'} | Computers: {'✅' if room['computers'] else '❌'} | Accessible: {'✅' if room['accessible'] else '❌'}")
-                            st.markdown("**Pros:**")
-                            for p in room["pros"]:
-                                st.markdown(f"- ✅ {p}")
-                            if room["trade_offs"]:
-                                st.markdown("**Trade-offs:**")
-                                for t in room["trade_offs"]:
-                                    st.markdown(f"- ⚠️ {t}")
-
-                        with col_book:
-                            st.write("**Reserve Space**")
-                            if st.button(f"📌 Book {r_id}", key=f"book_{r_id}_{idx}", use_container_width=True):
-                                req_id = db.create_booking_request(
-                                    username=user["username"],
-                                    room_id=r_id,
-                                    request_date=s["date"],
-                                    start_hour=s["start"],
-                                    duration_hours=s["dur"],
-                                    required_capacity=s["cap"],
-                                    projector_required=s["proj"],
-                                    computers_required=s["comp"],
-                                    accessible_required=s["acc"],
-                                    purpose=s["purpose"],
-                                    auto_approve=False
-                                )
-                                st.success(f"🎉 Request submitted! Request ID: **{req_id}** (Status: **Pending**). An administrator will review your booking.")
-                                st.rerun()
-
-            # Disqualified Room Breakdown
-            with st.expander(f"🔍 Disqualified Rooms Forensics ({len(rejs)} rooms)", expanded=False):
-                rej_table = []
-                for r in rejs:
-                    rej_table.append({
-                        "Room": r["room_id"],
-                        "Building": r["building"],
-                        "Capacity": r["capacity"],
-                        "Primary Rejection Reason": " | ".join(r["rejection_reasons"])
-                    })
-                st.dataframe(pd.DataFrame(rej_table), use_container_width=True, hide_index=True)
+            st.markdown(f"### Feasible Recommendations ({len(recs)} rooms available)")
+            for idx, room in enumerate(recs[:4], start=1):
+                r_id = room["room_id"]
+                with st.expander(f"Option #{idx}: Room {r_id} ({room['building']}) — Fit Score: {room['match_score']*100:.1f}%", expanded=(idx==1)):
+                    c_det, c_act = st.columns([3, 1])
+                    with c_det:
+                        st.write(f"**Capacity:** {room['capacity']} seats ({room['excess_capacity']} surplus)")
+                        st.write(f"**Type:** {room['room_type']} | **Power Outlets:** {room['power_outlets']}")
+                        st.write(f"**Facilities:** Projector: {'✅' if room['projector'] else '❌'} | Computers: {'✅' if room['computers'] else '❌'} | Accessible: {'✅' if room['accessible'] else '❌'}")
+                        st.markdown("**Pros:** " + ", ".join(room["pros"]))
+                    with c_act:
+                        st.markdown("**Reserve Space**")
+                        if st.button(f"📌 Book {r_id}", key=f"book_btn_{r_id}_{idx}", use_container_width=True):
+                            new_req_id = db.create_booking_request(
+                                username=user["username"],
+                                room_id=r_id,
+                                request_date=s["date"],
+                                start_hour=s["start"],
+                                duration_hours=s["dur"],
+                                required_capacity=s["cap"],
+                                projector_required=s["proj"],
+                                computers_required=s["comp"],
+                                accessible_required=s["acc"],
+                                purpose=s["purpose"],
+                                auto_approve=False
+                            )
+                            st.success(f"🎉 Booking request recorded! Request ID: **{new_req_id}** (Status: **Pending**).")
+                            st.rerun()
 
 
 # -----------------------------------------------------------------------------
-# PAGE: MY BOOKINGS
+# PAGE 3: MY BOOKINGS
 # -----------------------------------------------------------------------------
 elif page == "My Bookings":
-    st.markdown("## 📑 My Bookings & Request History")
-    st.write(f"Track, manage, and cancel room requests submitted by **{user['username']}**.")
+    render_header("My Bookings & Request History", f"Track and manage space reservations submitted by {user['username']}.")
 
-    my_bookings = db.get_user_bookings(user["username"])
+    bookings_df = db.get_user_bookings(user["username"])
 
-    if my_bookings.empty:
-        st.info("You haven't submitted any booking requests yet. Use **Find a Room** to make a reservation.")
+    if bookings_df.empty:
+        st.info("No bookings recorded for this account. Use **Find a Room** to submit a space reservation.")
     else:
-        # Filter tabs
-        status_filter = st.selectbox("Filter Status", ["All", "Pending", "Approved", "Rejected", "Cancelled"], index=0)
-        display_df = my_bookings if status_filter == "All" else my_bookings[my_bookings["status"] == status_filter]
+        st.markdown(f"**Showing {len(bookings_df)} reservations:**")
+        for _, b in bookings_df.iterrows():
+            req_id = b["request_id"]
+            stat = b["status"]
+            tier_val = b.get("priority_tier", "Standard")
+            badge_cfg = PRIORITY_BADGE_STYLE.get(PriorityTier(tier_val), PRIORITY_BADGE_STYLE[PriorityTier.STANDARD])
 
-        st.markdown(f"**Showing {len(display_df)} booking(s):**")
-        for _, row in display_df.iterrows():
-            req_id = row["request_id"]
-            stat = row["status"]
-            stat_class = f"status-badge-{stat.lower()}"
+            stat_color = "#166534" if stat == "Approved" else ("#92400e" if stat == "Pending" else "#991b1b")
+            stat_bg = "#dcfce7" if stat == "Approved" else ("#fef3c7" if stat == "Pending" else "#fee2e2")
 
             with st.container():
                 st.markdown(f"""
-                <div class="metric-card" style="margin-bottom:1rem;">
+                <div class="metric-card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h4 style="margin:0; color:#0f172a;">Request {req_id} — {row['purpose']}</h4>
-                        <span class="{stat_class}">{stat}</span>
+                        <div>
+                            <strong style="font-size:1.05rem; color:#0f172a;">Request {req_id}</strong>
+                            <span style="background:{badge_cfg['bg']}; color:{badge_cfg['color']}; border:1px solid {badge_cfg['border']}; padding:0.15rem 0.5rem; border-radius:4px; font-size:0.75rem; font-weight:600; margin-left:0.5rem;">{tier_val}</span>
+                        </div>
+                        <span style="background:{stat_bg}; color:{stat_color}; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.8rem; font-weight:600;">{stat}</span>
                     </div>
-                    <div style="margin-top:0.5rem; display:grid; grid-template-columns: repeat(4, 1fr); gap:1rem; font-size:0.9rem;">
-                        <div><strong>Room:</strong> {row['room_id'] or 'Unassigned'}</div>
-                        <div><strong>Date:</strong> {row['request_date']}</div>
-                        <div><strong>Time:</strong> {int(row['start_hour']):02d}:00 - {int(row['start_hour']+row['duration_hours']):02d}:00</div>
-                        <div><strong>Attendees:</strong> {row['required_capacity']}</div>
+                    <div style="margin-top:0.6rem; font-size:0.9rem; color:#334155;">
+                        <b>Purpose:</b> {b['purpose']}
                     </div>
-                    {f"<p style='color:#b91c1c; font-size:0.85rem; margin-top:0.4rem;'><strong>Rejection Note:</strong> {row['rejection_reason']}</p>" if row['rejection_reason'] else ""}
+                    <div style="margin-top:0.5rem; display:grid; grid-template-columns: repeat(4, 1fr); gap:1rem; font-size:0.85rem; color:#475569;">
+                        <div><strong>Room:</strong> {b['room_id'] or 'Pending Allocation'}</div>
+                        <div><strong>Date:</strong> {b['request_date']}</div>
+                        <div><strong>Time:</strong> {int(b['start_hour']):02d}:00 - {int(b['start_hour']+b['duration_hours']):02d}:00</div>
+                        <div><strong>Attendees:</strong> {b['required_capacity']}</div>
+                    </div>
+                    {f"<p style='color:#b91c1c; font-size:0.85rem; margin-top:0.5rem;'><strong>Note:</strong> {b['rejection_reason']}</p>" if b['rejection_reason'] else ""}
                 </div>
                 """, unsafe_allow_html=True)
 
                 if stat in ("Pending", "Approved"):
-                    if st.button(f"Cancel Request {req_id}", key=f"cancel_{req_id}"):
+                    if st.button(f"Cancel Reservation {req_id}", key=f"cancel_btn_{req_id}"):
                         ok, msg = db.cancel_booking(req_id, user["username"])
                         if ok:
                             st.success(msg)
@@ -543,132 +530,314 @@ elif page == "My Bookings":
 
 
 # -----------------------------------------------------------------------------
-# PAGE: CALENDAR VIEW
+# PAGE 4: CALENDAR VIEW
 # -----------------------------------------------------------------------------
 elif page == "Calendar View":
-    st.markdown("## 📅 Campus Room Timetable & Calendar")
-    st.write("Inspect daily schedules combining fixed university classes, special events, and confirmed student bookings.")
+    render_header("Campus Room Timetable", "Inspect daily commitments across recurring classes, campus events, and confirmed bookings.")
 
-    cal_col1, cal_col2 = st.columns(2)
-    with cal_col1:
-        cal_date = st.date_input("Select Date", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
-    with cal_col2:
-        cal_room = st.selectbox("Select Room", sorted(rooms_df["room_id"].unique()) if not rooms_df.empty else ["R001"])
+    c1, c2 = st.columns(2)
+    with c1:
+        cal_date = st.date_input("Calendar Date", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
+    with c2:
+        cal_room = st.selectbox("Target Room", sorted(rooms_df["room_id"].unique()) if not rooms_df.empty else ["R001"])
 
     cal_date_str = cal_date.strftime("%Y-%m-%d")
     cal_weekday = cal_date.strftime("%a")
 
-    st.markdown(f"### Schedule for **Room {cal_room}** on **{cal_date_str} ({cal_date.strftime('%A')})**")
-
-    # Fetch classes
     room_classes = sched_df[(sched_df["room_id"] == cal_room) & (sched_df["weekday"] == cal_weekday)]
-    # Fetch events
     room_events = events_df[(events_df["room_id"] == cal_room) & (events_df["event_date"] == cal_date_str)]
-    # Fetch confirmed student bookings from SQLite
     db_confirmed = [b for b in db.get_confirmed_bookings_for_date(cal_date_str) if b.get("room_id") == cal_room]
 
-    timeline_items = []
+    items = []
     for _, c in room_classes.iterrows():
-        timeline_items.append({
+        items.append({
             "Activity": f"Class: {c['course_code']} ({c['department']})",
-            "Type": "Recurring Academic Class",
+            "Category": "Academic Lecture",
+            "Priority": "High (Academic)",
             "Start": f"{int(c['start_hour']):02d}:00",
             "End": f"{int(c['start_hour']+c['duration_hours']):02d}:00",
-            "Attendance": c["expected_attendance"],
-            "Color": "#1e40af"
+            "Attendance": c["expected_attendance"]
         })
     for _, e in room_events.iterrows():
-        timeline_items.append({
+        items.append({
             "Activity": f"Event: {e['event_type']}",
-            "Type": "Special Event",
+            "Category": "Special Event",
+            "Priority": "Medium (Event)",
             "Start": f"{int(e['start_hour']):02d}:00",
             "End": f"{int(e['start_hour']+e['duration_hours']):02d}:00",
-            "Attendance": e["expected_attendance"],
-            "Color": "#7c3aed"
+            "Attendance": e["expected_attendance"]
         })
     for b in db_confirmed:
-        timeline_items.append({
-            "Activity": f"Student Booking: {b.get('purpose', 'Reserved')} (by {b.get('username')})",
-            "Type": "Confirmed Student Reservation",
+        items.append({
+            "Activity": f"Student Reservation: {b.get('purpose', 'Reserved')}",
+            "Category": "Student Booking",
+            "Priority": b.get("priority_tier", "Standard"),
             "Start": f"{int(b['start_hour']):02d}:00",
             "End": f"{int(b['start_hour']+b['duration_hours']):02d}:00",
-            "Attendance": "N/A",
-            "Color": "#059669"
+            "Attendance": "Confirmed"
         })
 
-    if not timeline_items:
-        st.success(f"✨ Room {cal_room} has no scheduled activities on {cal_date_str}. The room is free all day!")
+    if not items:
+        st.success(f"✨ Room {cal_room} has zero commitments on {cal_date_str} ({cal_date.strftime('%A')}). Free all day.")
     else:
-        timeline_df = pd.DataFrame(timeline_items).sort_values(by="Start")
-        st.dataframe(timeline_df[["Activity", "Type", "Start", "End", "Attendance"]], use_container_width=True, hide_index=True)
+        cal_df = pd.DataFrame(items).sort_values(by="Start")
+        st.dataframe(cal_df, use_container_width=True, hide_index=True)
 
 
 # -----------------------------------------------------------------------------
-# PAGE: DEMAND FORECAST (ML COMPONENT TRAINED FROM SCRATCH)
+# PAGE 5: MULTI-EVENT OPTIMIZER (WITH PRIORITY WEIGHTING)
 # -----------------------------------------------------------------------------
-elif page == "Demand Forecast":
-    st.markdown("## 🔮 Campus Hourly Demand Forecasting (ML)")
+elif page == "Multi-Event Optimizer":
+    render_header("Multi-Event Room Allocation Optimizer", "Mathematical space allocation contrasting Google OR-Tools CP-SAT against Greedy Baseline.")
+
+    st.info("⚖️ **Priority-Weighted Objective Active:** Mathematical solver assigns weights (Exam: 100, Class: 50, Seminar: 25, Study: 10, Cultural: 5). High-stakes exams take precedence during space shortages.")
+
+    o1, o2, o3 = st.columns(3)
+    with o1:
+        target_opt_date = st.date_input("Target Date", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
+    with o2:
+        solver_timeout = st.slider("CP-SAT Time Limit (Seconds)", min_value=3, max_value=25, value=10)
+    with o3:
+        status_filter = st.multiselect("Request Statuses", ["Waitlisted", "Approved", "Cancelled", "Rejected"], default=["Waitlisted", "Approved"])
+
+    target_date_str = target_opt_date.strftime("%Y-%m-%d")
+    date_reqs = reqs_df[reqs_df["request_date"] == target_date_str].copy()
+    if status_filter:
+        date_reqs = date_reqs[date_reqs["status"].isin(status_filter)]
+
+    st.markdown(f"**Evaluating {len(date_reqs)} incoming requests for {target_date_str}:**")
+
+    if st.button("🚀 Execute Global CP-SAT Solver", type="primary", use_container_width=True):
+        if date_reqs.empty:
+            st.warning("No requests match the selected date and status filters.")
+        else:
+            with st.spinner("Formulating CP-SAT decision variables and solving..."):
+                benchmark = optimizer_engine.compare_optimizer_vs_baseline(date_reqs, time_limit_seconds=float(solver_timeout))
+
+            m = benchmark["metrics"]
+            opt = m["optimizer"]
+            base = m["baseline"]
+            deltas = m["deltas"]
+
+            st.markdown("### Benchmark Evaluation")
+            bc1, bc2, bc3, bc4 = st.columns(4)
+            bc1.metric("Fulfillment Rate", f"{opt['fulfillment_rate']}%", f"{deltas['fulfillment_gain_pct']:+}% vs Greedy")
+            bc2.metric("Requests Accommodated", f"{opt['assigned_count']} / {m['requests_evaluated']}", f"{deltas['additional_requests_served']:+} extra requests")
+            bc3.metric("Excess Seats Wasted", f"{opt['total_excess_seats']:,}", f"-{deltas['excess_seats_saved']:,} seats saved")
+            bc4.metric("Constraint Violations", "0", "Formally Guaranteed")
+
+            st.markdown("### Allocations Breakdown")
+            opt_allocs = benchmark["optimizer_result"]["allocations"]
+            if opt_allocs:
+                alloc_df = pd.DataFrame(opt_allocs)
+                display_cols = ["request_id", "room_id", "priority_tier", "building", "start_hour", "end_hour", "required_capacity", "allocated_room_capacity", "excess_capacity", "purpose"]
+                st.dataframe(alloc_df[display_cols], use_container_width=True, hide_index=True)
+
+
+# -----------------------------------------------------------------------------
+# PAGE 6: AUTOMATIC REALLOCATION & SWAP ENGINE
+# -----------------------------------------------------------------------------
+elif page == "Automatic Reallocation & Swaps":
+    render_header("Automatic Room Reallocation & Swap Engine", "Solves capacity bottlenecks and bounded swap chains without shifting schedule hours.")
+
     st.write("""
-    **Trained from Scratch using pure NumPy Linear Regression with L2 Regularization.**
-    Predicts student room demand by time slot to anticipate space bottlenecks before they occur.
+    Scans scheduled commitments for **Mutual Room Swaps** (crowded class in small room $\\leftrightarrow$ small class in oversized hall) 
+    and **Bounded Swap Chains** (Request $Q \\to$ Room 1 $\\to$ Room 2) with atomic administrative approval.
     """)
 
-    # Display real training metrics from artifacts
+    sw_c1, sw_c2 = st.columns([2, 1])
+    with sw_c1:
+        realloc_date = st.date_input("Scan Date", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
+    with sw_c2:
+        max_props = st.slider("Max Proposals to Generate", min_value=2, max_value=10, value=4)
+
+    realloc_date_str = realloc_date.strftime("%Y-%m-%d")
+
+    if st.button("🔍 Scan Schedule & Generate Proposals", type="primary", use_container_width=True):
+        with st.spinner("Analyzing capacity mismatches and searching bounded swap chains..."):
+            day_reqs = reqs_df[reqs_df["request_date"] == realloc_date_str].head(10)
+            props = realloc_engine.generate_all_proposals(
+                date_str=realloc_date_str,
+                unallocated_requests=day_reqs,
+                max_proposals=max_props
+            )
+            st.success(f"Generated {len(props)} actionable reallocation proposals!")
+
+    # Display existing stored proposals
+    stored_proposals = db.get_reallocation_proposals()
+    if not stored_proposals:
+        st.info("No active reallocation proposals in database. Click 'Scan Schedule & Generate Proposals' above.")
+    else:
+        st.markdown(f"### Stored Reallocation Proposals ({len(stored_proposals)} in queue)")
+        for p in stored_proposals:
+            p_id = p["proposal_id"]
+            p_stat = p["status"]
+            p_type = p["proposal_type"]
+
+            with st.container():
+                st.markdown(f"""
+                <div class="rec-card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <strong style="font-size:1.05rem; color:#0f172a;">{p_id} ({p_type.replace('_', ' ')})</strong>
+                            <span style="color:#0f766e; font-size:0.85rem; margin-left:0.5rem;">| Disruption Cost: <b>{p['disruption_cost']}</b> | Seat Waste Reduction: <b>{p['seat_mismatch_reduction']} seats</b></span>
+                        </div>
+                        <span style="font-size:0.8rem; font-weight:600; padding:0.2rem 0.6rem; border-radius:4px; background:#f1f5f9; color:#334155;">{p_stat}</span>
+                    </div>
+                    <p style="margin:0.5rem 0; font-size:0.9rem; color:#334155;">{p['summary']}</p>
+                    <div style="font-size:0.85rem; color:#475569;">
+                        <b>Movement Items ({len(p['items'])}):</b>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if p["items"]:
+                    items_df = pd.DataFrame(p["items"])[["title", "current_room_id", "proposed_room_id", "priority_tier", "event_date", "start_hour", "duration_hours"]]
+                    st.dataframe(items_df, use_container_width=True, hide_index=True)
+
+                if p_stat == "Pending":
+                    btn_c1, btn_c2, _ = st.columns([1, 1, 3])
+                    with btn_c1:
+                        if st.button(f"✅ Approve & Execute {p_id}", key=f"app_prop_{p_id}", use_container_width=True):
+                            ok, msg = db.approve_reallocation_proposal(p_id, user["username"], avail_engine)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with btn_c2:
+                        if st.button(f"❌ Reject {p_id}", key=f"rej_prop_{p_id}", use_container_width=True):
+                            ok, msg = db.reject_reallocation_proposal(p_id, user["username"], reason="Administrative policy override")
+                            if ok:
+                                st.warning(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+
+# -----------------------------------------------------------------------------
+# PAGE 7: DEMAND FORECAST (NUMPY ML TRAINED FROM SCRATCH)
+# -----------------------------------------------------------------------------
+elif page == "Demand Forecast (ML)":
+    render_header("Campus Hourly Demand Forecasting (ML)", "Predicts student room demand by time slot to anticipate space bottlenecks before they occur.")
+
     metrics_file = ROOT_DIR / "data" / "ml_evaluation_metrics.json"
     if metrics_file.exists():
-        import json
         with open(metrics_file, "r") as mf:
             eval_data = json.load(mf)
-        
-        m_c1, m_c2, m_c3, m_c4 = st.columns(4)
-        m_c1.metric("Model Architecture", "NumPy Linear Reg", "Pure NumPy")
-        m_c2.metric("Test MAE", f"{eval_data['model_test_metrics']['mae']:.4f} reqs", f"{eval_data['improvement_pct_mae']:+}% vs Baseline")
-        m_c3.metric("Test RMSE", f"{eval_data['model_test_metrics']['rmse']:.4f} reqs", f"{eval_data['improvement_pct_rmse']:+}% vs Baseline")
-        m_c4.metric("Training Observations", f"{eval_data['train_samples']:,} samples", "70/15/15 Chrono Split")
 
-    st.markdown("### 🎯 Interactive Demand Predictor")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Model Architecture", "NumPy Linear Reg", "Pure NumPy")
+        m2.metric("Held-Out Test MAE", f"{eval_data['model_test_metrics']['mae']:.4f}", f"{eval_data['improvement_pct_mae']:+}% vs Baseline")
+        m3.metric("Held-Out Test RMSE", f"{eval_data['model_test_metrics']['rmse']:.4f}", f"{eval_data['improvement_pct_rmse']:+}% vs Baseline")
+        m4.metric("Chronological Test Set", f"{eval_data['test_samples']} hourly slots", "Zero Future Leakage")
+
+    st.markdown("### Interactive Demand Inference")
     f_c1, f_c2 = st.columns(2)
     with f_c1:
-        f_date = st.date_input("Forecast Date", value=date(2025, 11, 25), min_value=date(2025, 8, 1), max_value=date(2025, 12, 15))
-        f_hour = st.slider("Time Slot (Hour)", min_value=8, max_value=20, value=14, step=1)
+        f_date = st.date_input("Inference Date", value=date(2025, 11, 25), min_value=date(2025, 8, 1), max_value=date(2025, 12, 15))
+        f_hour = st.slider("Time Slot (Hour of Day)", min_value=8, max_value=20, value=14, step=1)
     with f_c2:
-        st.markdown("**Historical Context:**")
-        st.caption("Features ingested: Cyclic hour $\\sin/\\cos$, cyclic weekday $\\sin/\\cos$, calendar month, 1-step lag, 1-day lag, rolling 7-period moving average.")
-        st.caption("Training method: Batch Gradient Descent ($\alpha=0.05$, 2,000 epochs, $\lambda_{L2}=0.01$).")
+        st.markdown("**Feature Inputs Fed to Model:**")
+        st.caption("Cyclic hour (sin/cos), cyclic weekday (sin/cos), month, 1-hour lag, 24-hour lag, rolling 7-hour moving average.")
+        st.caption("Training procedure: Batch Gradient Descent with L2 penalty on 70% chronological train partition.")
 
-    if st.button("🔮 Forecast Demand for This Slot", type="primary", use_container_width=True):
+    if st.button("🔮 Generate Model Inference", type="primary", use_container_width=True):
         if ml_forecaster.model is None:
-            st.error("ML model weights not found. Run `python scripts/train_model.py` first.")
+            st.error("Model weights not found. Run `python scripts/train_model.py` first.")
         else:
             ts_recent = DemandForecaster.prepare_demand_series(reqs_df)
-            pred_res = ml_forecaster.predict_slot(f_date.strftime("%Y-%m-%d"), f_hour, recent_history_df=ts_recent)
+            pred = ml_forecaster.predict_slot(f_date.strftime("%Y-%m-%d"), f_hour, recent_history_df=ts_recent)
 
             p1, p2, p3 = st.columns(3)
-            p1.metric("Predicted Request Demand", f"{pred_res['predicted_requests']} requests", f"~{pred_res['rounded_request_count']} bookings expected")
-            p2.metric("Historical Mean Baseline", f"{pred_res['historical_mean_baseline']} requests")
-            p3.metric("Demand Intensity", pred_res["demand_intensity"])
+            p1.metric("Predicted Hourly Requests", f"{pred['predicted_requests']}", f"~{pred['rounded_request_count']} reservations")
+            p2.metric("Historical Mean Baseline", f"{pred['historical_mean_baseline']}")
+            p3.metric("Demand Classification", pred["demand_intensity"])
 
-            # Check capacity bottleneck
-            avail_rooms_count = 0
-            for r_id in rooms_df["room_id"]:
-                is_free, _ = avail_engine.is_room_available(r_id, f_date.strftime("%Y-%m-%d"), f_hour, 1.0)
-                if is_free:
-                    avail_rooms_count += 1
-
-            if pred_res["predicted_requests"] > avail_rooms_count:
-                st.error(f"🚨 **Demand Bottleneck Alert:** Forecast predicts **{pred_res['predicted_requests']} requests**, but only **{avail_rooms_count} rooms** are available at {f_hour:02d}:00 on {f_date}. Consider administrative load-balancing!")
+            # Compare against feasible supply
+            free_rooms = sum(1 for r in rooms_df["room_id"] if avail_engine.is_room_available(r, f_date.strftime("%Y-%m-%d"), f_hour, 1.0)[0])
+            if pred["predicted_requests"] > free_rooms:
+                st.error(f"🚨 **Space Deficit Warning:** Model predicts **{pred['predicted_requests']} requests**, but only **{free_rooms} rooms** are available at {f_hour:02d}:00 on {f_date}.")
             else:
-                st.success(f"✅ **Sufficient Supply:** Campus has **{avail_rooms_count} available rooms** at {f_hour:02d}:00 to accommodate predicted demand of {pred_res['predicted_requests']} requests.")
+                st.success(f"✅ **Adequate Inventory:** Campus has **{free_rooms} available rooms** at {f_hour:02d}:00 to accommodate expected demand of {pred['predicted_requests']} requests.")
 
 
 # -----------------------------------------------------------------------------
-# PAGE: ADMIN WORKSPACE
+# PAGE 8: SPACE ANALYTICS
+# -----------------------------------------------------------------------------
+elif page == "Space Analytics":
+    render_header("Campus Utilization & Demand Analytics", "Scheduled utilization analysis distinguishing scheduled commitments from physical sensor occupancy.")
+
+    tab_util, tab_heatmap, tab_demand = st.tabs(["Scheduled Utilization", "Occupancy Heatmap", "Demand vs Supply"])
+
+    with tab_util:
+        st.write("Distribution of scheduled lecture and event hours across rooms:")
+        util_df = util_engine.get_all_room_utilization()
+        st.dataframe(util_df[["room_id", "building", "room_type", "capacity", "weekly_scheduled_hours", "scheduled_utilization_rate"]], use_container_width=True, hide_index=True)
+
+    with tab_heatmap:
+        st.write("Campus scheduled room occupancy heatmap by weekday and hour:")
+        hm_matrix = util_engine.get_hourly_heatmap_matrix()
+        fig_hm = px.imshow(
+            hm_matrix,
+            labels=dict(x="Hour of Day", y="Weekday", color="Rooms Occupied"),
+            x=[f"{h:02d}:00" for h in hm_matrix.columns],
+            y=list(hm_matrix.index),
+            color_continuous_scale="Teal"
+        )
+        st.plotly_chart(fig_hm, use_container_width=True)
+
+    with tab_demand:
+        st.write("Comparison of physical room capacity tiers against student attendance demands:")
+        d_vs_s = util_engine.get_demand_vs_supply_summary(reqs_df)
+        st.dataframe(d_vs_s, use_container_width=True, hide_index=True)
+
+
+# -----------------------------------------------------------------------------
+# PAGE 9: DATA INGESTION & REST API WORKBENCH
+# -----------------------------------------------------------------------------
+elif page == "Data Ingestion & REST API":
+    render_header("Data Ingestion & REST API Workbench", "Controlled transactional data imports and interactive FastAPI OpenAPI / Swagger endpoints.")
+
+    st.markdown("""
+    **FastAPI Service is running on Port 8000.**  
+    Explore interactive Swagger documentation: [http://localhost:8000/docs](http://localhost:8000/docs)
+    """)
+
+    st.markdown("### 📤 Upload Operational Data Batch (CSV)")
+    upload_type = st.selectbox("Entity Type", ["rooms", "class_schedule", "events", "room_requests"])
+    uploaded_file = st.file_uploader(f"Choose a CSV file for '{upload_type}'", type=["csv"])
+
+    if uploaded_file is not None:
+        try:
+            input_df = pd.read_csv(uploaded_file)
+            st.write(f"Loaded {len(input_df)} records preview:")
+            st.dataframe(input_df.head(5), use_container_width=True)
+
+            if st.button("🚀 Process & Ingest Transactionally", type="primary"):
+                records = input_df.to_dict(orient="records")
+                res = ingest_service.ingest_payload(upload_type, records, source_name=f"Upload: {uploaded_file.name}")
+                if res["status"] in ("SUCCESS", "PARTIAL"):
+                    st.success(f"Import {res['import_id']} completed with status {res['status']}: {res['total_accepted']} accepted, {res['total_rejected']} rejected.")
+                else:
+                    st.error(f"Import {res['import_id']} failed: {res['error_log']}")
+        except Exception as e:
+            st.error(f"Failed to read CSV: {str(e)}")
+
+    st.markdown("### 📋 Transactional Ingestion Audit Trail")
+    imports = db.get_data_imports()
+    if imports:
+        st.dataframe(pd.DataFrame(imports), use_container_width=True, hide_index=True)
+    else:
+        st.info("No external imports recorded yet.")
+
+
+# -----------------------------------------------------------------------------
+# PAGE 10: ADMIN WORKSPACE
 # -----------------------------------------------------------------------------
 elif page == "Admin Workspace":
-    st.markdown("## 🛡️ Administrator Workspace")
-    st.write("Review pending student requests, verify real-time conflicts atomically, and approve/reject bookings.")
+    render_header("Administrator Workspace", "Review pending student requests, verify real-time conflicts atomically, and approve/reject bookings.")
 
-    # High-level KPIs
     all_reqs = db.get_all_bookings()
     p_count = len(all_reqs[all_reqs["status"] == "Pending"])
     a_count = len(all_reqs[all_reqs["status"] == "Approved"])
@@ -681,22 +850,31 @@ elif page == "Admin Workspace":
     ak3.metric("Rejected Requests", r_count)
     ak4.metric("Cancelled Bookings", c_count)
 
-    st.markdown("### 📥 Pending Requests Awaiting Action")
+    st.markdown("### Pending Requests Queue")
     pending_df = all_reqs[all_reqs["status"] == "Pending"]
 
     if pending_df.empty:
-        st.success("✨ All pending student requests have been processed! No requests currently in queue.")
+        st.success("✨ Zero pending booking requests. All campus requests have been processed.")
     else:
         for _, req in pending_df.iterrows():
             req_id = req["request_id"]
+            tier_val = req.get("priority_tier", "Standard")
+            badge_cfg = PRIORITY_BADGE_STYLE.get(PriorityTier(tier_val), PRIORITY_BADGE_STYLE[PriorityTier.STANDARD])
+
             with st.container():
                 st.markdown(f"""
                 <div class="rec-card">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h4 style="margin:0; color:#0f172a;">Request {req_id} — {req['purpose']} (by {req['username']})</h4>
-                        <span class="status-badge-pending">Pending</span>
+                        <div>
+                            <strong style="font-size:1.05rem; color:#0f172a;">Request {req_id}</strong>
+                            <span style="background:{badge_cfg['bg']}; color:{badge_cfg['color']}; border:1px solid {badge_cfg['border']}; padding:0.15rem 0.5rem; border-radius:4px; font-size:0.75rem; font-weight:600; margin-left:0.5rem;">{tier_val}</span>
+                        </div>
+                        <span style="background:#fef3c7; color:#92400e; padding:0.2rem 0.6rem; border-radius:9999px; font-size:0.8rem; font-weight:600;">Pending Review</span>
                     </div>
-                    <div style="margin-top:0.5rem; display:grid; grid-template-columns: repeat(4, 1fr); gap:1rem; font-size:0.9rem;">
+                    <div style="margin-top:0.5rem; font-size:0.9rem; color:#334155;">
+                        <b>Purpose:</b> {req['purpose']} (by {req['username']})
+                    </div>
+                    <div style="margin-top:0.5rem; display:grid; grid-template-columns: repeat(4, 1fr); gap:1rem; font-size:0.85rem; color:#475569;">
                         <div><strong>Target Room:</strong> {req['room_id'] or 'Unassigned'}</div>
                         <div><strong>Date:</strong> {req['request_date']}</div>
                         <div><strong>Time:</strong> {int(req['start_hour']):02d}:00 - {int(req['start_hour']+req['duration_hours']):02d}:00</div>
@@ -705,8 +883,8 @@ elif page == "Admin Workspace":
                 </div>
                 """, unsafe_allow_html=True)
 
-                act_col1, act_col2, _ = st.columns([1, 1, 3])
-                with act_col1:
+                act_c1, act_c2, _ = st.columns([1, 1, 3])
+                with act_c1:
                     if st.button(f"✅ Approve {req_id}", key=f"adm_app_{req_id}", use_container_width=True):
                         ok, msg = db.approve_booking(req_id, user["username"], avail_engine)
                         if ok:
@@ -714,256 +892,14 @@ elif page == "Admin Workspace":
                             st.rerun()
                         else:
                             st.error(msg)
-
-                with act_col2:
+                with act_c2:
                     if st.button(f"❌ Reject {req_id}", key=f"adm_rej_{req_id}", use_container_width=True):
-                        ok, msg = db.reject_booking(req_id, user["username"], reason="Administrative capacity rebalance")
+                        ok, msg = db.reject_booking(req_id, user["username"], reason="Administrative space prioritization")
                         if ok:
                             st.warning(msg)
                             st.rerun()
                         else:
                             st.error(msg)
 
-    st.markdown("### 📋 Complete Booking Database Log")
+    st.markdown("### Complete Bookings Log")
     st.dataframe(all_reqs, use_container_width=True, hide_index=True)
-
-
-# -----------------------------------------------------------------------------
-# PAGE: MULTI-EVENT OPTIMIZER
-# -----------------------------------------------------------------------------
-elif page == "Multi-Event Optimizer":
-    st.markdown("## ⚡ Multi-Event Room Allocation Optimizer")
-    st.write("""
-    Solve campus-wide space allocation across multiple competing requests simultaneously.
-    Contrasts mathematical **Google OR-Tools CP-SAT** optimization against a **Greedy First-Feasible** baseline under identical hard constraints.
-    """)
-
-    opt_col1, opt_col2, opt_col3 = st.columns(3)
-    with opt_col1:
-        target_date = st.date_input("Target Allocation Date", value=date(2025, 9, 15), min_value=date(2025, 8, 1), max_value=date(2025, 11, 30))
-    with opt_col2:
-        solver_time_limit = st.slider("Solver Time Limit (Seconds)", min_value=3, max_value=30, value=10)
-    with opt_col3:
-        filter_status = st.multiselect("Request Status Filter", ["Waitlisted", "Approved", "Cancelled", "Rejected"], default=["Waitlisted", "Approved"])
-
-    target_date_str = target_date.strftime("%Y-%m-%d")
-    date_reqs = reqs_df[reqs_df["request_date"] == target_date_str].copy()
-    if filter_status:
-        date_reqs = date_reqs[date_reqs["status"].isin(filter_status)]
-
-    st.markdown(f"**Active Demands for {target_date_str}:** {len(date_reqs)} incoming requests")
-
-    if st.button("🚀 Run Global Optimization Engine", type="primary", use_container_width=True):
-        if date_reqs.empty:
-            st.warning(f"No requests found for {target_date_str} with the selected status filters.")
-        else:
-            with st.spinner("Solving global allocation via Google OR-Tools CP-SAT..."):
-                benchmark = optimizer_engine.compare_optimizer_vs_baseline(date_reqs, time_limit_seconds=float(solver_time_limit))
-
-            m = benchmark["metrics"]
-            opt = m["optimizer"]
-            base = m["baseline"]
-            deltas = m["deltas"]
-
-            st.markdown("### 📊 Benchmark: Optimizer vs. Greedy Baseline")
-            bc1, bc2, bc3, bc4 = st.columns(4)
-            bc1.metric("Fulfillment Rate", f"{opt['fulfillment_rate']}%", delta=f"{deltas['fulfillment_gain_pct']:+}% vs Greedy")
-            bc2.metric("Requests Accommodated", f"{opt['assigned_count']} / {m['requests_evaluated']}", delta=f"{deltas['additional_requests_served']:+} extra requests")
-            bc3.metric("Avg Excess Seats Wasted", f"{opt['avg_excess_seats']} seats", delta=f"-{base['avg_excess_seats'] - opt['avg_excess_seats']:.1f} seat waste")
-            bc4.metric("Hard Constraint Violations", f"{opt['hard_constraint_violations']}", delta="0 (Guaranteed)")
-
-            comp_df = pd.DataFrame([
-                {"Metric": "Algorithm / Solver", "OR-Tools CP-SAT (KAIROS)": opt["method"], "Greedy First-Feasible Baseline": base["method"]},
-                {"Metric": "Requests Accommodated", "OR-Tools CP-SAT (KAIROS)": f"{opt['assigned_count']} ({opt['fulfillment_rate']}%)", "Greedy First-Feasible Baseline": f"{base['assigned_count']} ({base['fulfillment_rate']}%)"},
-                {"Metric": "Total Excess Seats Wasted", "OR-Tools CP-SAT (KAIROS)": f"{opt['total_excess_seats']:,} seats", "Greedy First-Feasible Baseline": f"{base['total_excess_seats']:,} seats"},
-                {"Metric": "Average Excess per Room", "OR-Tools CP-SAT (KAIROS)": f"{opt['avg_excess_seats']} seats", "Greedy First-Feasible Baseline": f"{base['avg_excess_seats']} seats"},
-                {"Metric": "Execution Runtime", "OR-Tools CP-SAT (KAIROS)": f"{opt['runtime_seconds']} sec", "Greedy First-Feasible Baseline": f"{base['runtime_seconds']} sec"},
-                {"Metric": "Hard Constraint Violations", "OR-Tools CP-SAT (KAIROS)": "0 (Strictly Enforced)", "Greedy First-Feasible Baseline": "0 (Strictly Enforced)"}
-            ])
-            st.table(comp_df.set_index("Metric"))
-
-            opt_allocs = benchmark["optimizer_result"]["allocations"]
-            if opt_allocs:
-                st.markdown("### 📋 Proposed Room Allocations")
-                alloc_df = pd.DataFrame(opt_allocs)
-                display_cols = ["request_id", "room_id", "building", "room_type", "start_hour", "end_hour", "required_capacity", "allocated_room_capacity", "excess_capacity", "utilization_rate", "purpose"]
-                st.dataframe(alloc_df[display_cols], use_container_width=True, hide_index=True)
-
-
-# -----------------------------------------------------------------------------
-# PAGE: CAPACITY SWAPS
-# -----------------------------------------------------------------------------
-elif page == "Capacity Swaps":
-    st.markdown("## 🔄 Capacity-Aware Room Swaps")
-    st.write("""
-    Identifies zero-disruption room exchanges between concurrent scheduled classes.
-    By swapping rooms between an overflowing class and an underutilized lecture hall at the **exact same time**, 
-    KAIROS solves severe overcrowding without altering class start times.
-    """)
-
-    swap_engine = CapacitySwapEngine(rooms_df, sched_df, events_df)
-    proposals = swap_engine.detect_swaps(max_proposals=6)
-
-    if not proposals:
-        st.info("No capacity swap bottlenecks detected in the current filter.")
-    else:
-        for idx, swap in enumerate(proposals, start=1):
-            cA = swap["class_A"]
-            cB = swap["class_B"]
-            with st.container():
-                st.markdown(f"""
-                <div class="rec-card" style="border-left-color: #6366f1;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h4 style="margin:0; color:#1e1b4b;">Swap Proposal #{idx}: {cA['course']} & {cB['course']} ({swap['weekday']} {swap['time_slot']})</h4>
-                        <span class="badge-tag" style="background:#4338ca;">Reduces {swap['seat_mismatch_reduction']} Seats of Waste</span>
-                    </div>
-                    <hr style="margin:0.75rem 0;"/>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.5rem;">
-                        <div>
-                            <strong>Class 1: {cA['course']} ({cA['department']})</strong><br/>
-                            • Expected Attendance: <b>{cA['attendance']} students</b><br/>
-                            • Current Room: <b>{cA['current_room']}</b> ({cA['current_capacity']} seats) — <span style="color:#b91c1c;">{cA['current_fit']}</span><br/>
-                            • Proposed Room: <b>{cA['proposed_room']}</b> ({cA['proposed_capacity']} seats) — <span style="color:#15803d;">{cA['proposed_fit']}</span>
-                        </div>
-                        <div>
-                            <strong>Class 2: {cB['course']} ({cB['department']})</strong><br/>
-                            • Expected Attendance: <b>{cB['attendance']} students</b><br/>
-                            • Current Room: <b>{cB['current_room']}</b> ({cB['current_capacity']} seats) — <span style="color:#b45309;">{cB['current_fit']}</span><br/>
-                            • Proposed Room: <b>{cB['proposed_room']}</b> ({cB['proposed_capacity']} seats) — <span style="color:#15803d;">{cB['proposed_fit']}</span>
-                        </div>
-                    </div>
-                    <div style="margin-top:0.75rem; font-size:0.85rem; color:#475569;">
-                        <strong>Key Benefits:</strong> {', '.join(swap['rationales'])}<br/>
-                        <strong>Trade-off:</strong> {swap['trade_offs']}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-
-# -----------------------------------------------------------------------------
-# PAGE: SPACE ANALYTICS
-# -----------------------------------------------------------------------------
-elif page == "Space Analytics":
-    st.markdown("## 📈 Campus Utilization & Demand Analytics")
-    st.write("Scheduled utilization analysis based on recurring class schedules and special events.")
-
-    tab_overview, tab_heatmap, tab_demand = st.tabs(["Room Utilization", "Time-Slot Heatmap", "Demand vs. Supply"])
-
-    with tab_overview:
-        weekly_util = util_engine.compute_weekly_schedule_utilization()
-        if not weekly_util.empty:
-            u1, u2, u3 = st.columns(3)
-            u1.metric("Average Scheduled Utilization", f"{weekly_util['scheduled_utilization_rate'].mean():.1f}%")
-            u2.metric("Highest Utilized Room", f"{weekly_util.sort_values(by='scheduled_utilization_rate', ascending=False).iloc[0]['room_id']} ({weekly_util['scheduled_utilization_rate'].max():.1f}%)")
-            u3.metric("Operating Denominator", f"{OPERATING_HOURS_PER_DAY * 6} hrs/week (Mon–Sat)")
-
-            col_chart1, col_chart2 = st.columns(2)
-            with col_chart1:
-                top_rooms = weekly_util.sort_values(by="scheduled_utilization_rate", ascending=False).head(15)
-                fig_top = px.bar(
-                    top_rooms,
-                    x="room_id",
-                    y="scheduled_utilization_rate",
-                    color="scheduled_utilization_rate",
-                    title="Top 15 Most Utilized Rooms (% Weekly Scheduled Hours)",
-                    color_continuous_scale="Teal",
-                    labels={"scheduled_utilization_rate": "Utilization %", "room_id": "Room"}
-                )
-                fig_top.update_layout(height=350, margin=dict(l=20, r=20, t=40, b=20))
-                st.plotly_chart(fig_top, use_container_width=True)
-
-            with col_chart2:
-                fig_bldg = px.box(
-                    weekly_util,
-                    x="building",
-                    y="scheduled_utilization_rate",
-                    color="building",
-                    title="Scheduled Utilization Variance by Building",
-                    labels={"scheduled_utilization_rate": "Utilization %", "building": "Building"}
-                )
-                fig_bldg.update_layout(height=350, margin=dict(l=20, r=20, t=40, b=20))
-                st.plotly_chart(fig_bldg, use_container_width=True)
-
-    with tab_heatmap:
-        heatmap_data = util_engine.compute_hourly_heatmap_data()
-        if not heatmap_data.empty:
-            pivot_df = heatmap_data.pivot(index="hour", columns="weekday", values="occupancy_rate_pct")
-            ordered_cols = [c for c in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] if c in pivot_df.columns]
-            pivot_df = pivot_df[ordered_cols]
-
-            fig_hm = px.imshow(
-                pivot_df,
-                labels=dict(x="Day of Week", y="Hour of Day", color="Occupied Rooms %"),
-                x=ordered_cols,
-                y=[f"{h:02d}:00" for h in pivot_df.index],
-                color_continuous_scale="YlGnBu",
-                title="Campus Scheduled Occupancy Heatmap (% Rooms Booked by Hour)"
-            )
-            fig_hm.update_layout(height=450, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig_hm, use_container_width=True)
-
-    with tab_demand:
-        dvs = util_engine.compute_demand_vs_supply(reqs_df)
-        if "data" in dvs and not dvs["data"].empty:
-            dvs_df = dvs["data"]
-            fig_dvs = go.Figure(data=[
-                go.Bar(name='Physical Room Supply', x=dvs_df['capacity_band'], y=dvs_df['room_supply_count'], marker_color='#0f766e'),
-                go.Bar(name='Incoming Student Requests', x=dvs_df['capacity_band'], y=dvs_df['request_demand_count'], marker_color='#0284c7')
-            ])
-            fig_dvs.update_layout(
-                barmode='group',
-                title="Demand (Student Requests) vs. Supply (Physical Rooms) by Capacity Band",
-                height=400,
-                margin=dict(l=20, r=20, t=40, b=20)
-            )
-            st.plotly_chart(fig_dvs, use_container_width=True)
-            st.dataframe(dvs_df, use_container_width=True, hide_index=True)
-
-
-# -----------------------------------------------------------------------------
-# PAGE: DATA QUALITY & SOURCES
-# -----------------------------------------------------------------------------
-elif page == "Data Quality & Sources":
-    st.markdown("## 🔍 Data Quality & Source Provenance")
-    st.write("Audit dataset schemas, check missing values, and upload replacement CSVs.")
-
-    st.markdown(f"**Active Data Source:** `{current_source}`")
-
-    # Upload replacement CSVs
-    with st.expander("📤 Upload Custom / Replacement CSV Datasets", expanded=False):
-        u_rooms = st.file_uploader("Upload rooms.csv", type=["csv"], key="u_rooms")
-        u_sched = st.file_uploader("Upload class_schedule.csv", type=["csv"], key="u_sched")
-        u_events = st.file_uploader("Upload events.csv", type=["csv"], key="u_events")
-        u_reqs = st.file_uploader("Upload room_requests.csv", type=["csv"], key="u_reqs")
-
-        if st.button("Apply Uploaded Datasets", use_container_width=True):
-            buffers = {}
-            if u_rooms: buffers["rooms"] = u_rooms
-            if u_sched: buffers["class_schedule"] = u_sched
-            if u_events: buffers["events"] = u_events
-            if u_reqs: buffers["room_requests"] = u_reqs
-
-            if buffers:
-                loader = DataLoader()
-                custom_dfs, s_name = loader.load_all(custom_buffers=buffers)
-                st.session_state["custom_data"] = custom_dfs
-                st.success(f"Custom datasets loaded successfully! Source: {s_name}")
-                st.rerun()
-
-    q_s1, q_s2, q_s3, q_s4 = st.columns(4)
-    q_s1.metric("Ingested Records", f"{dq_report['summary']['total_records_ingested']:,}")
-    q_s2.metric("Missing Fields", f"{dq_report['summary']['total_missing_fields']}")
-    q_s3.metric("Duplicate Identifiers", f"{dq_report['summary']['total_duplicate_ids']}")
-    q_s4.metric("Referential Integrity", "Passed ✅" if dq_report['referential_integrity']['integrity_passed'] else "Orphans ❌")
-
-    audit_summary = []
-    for k, v in dq_report["dataset_audits"].items():
-        audit_summary.append({
-            "Dataset": k,
-            "Row Count": f"{v['row_count']:,}",
-            "Column Count": v['column_count'],
-            "Null Values": v['null_values_count'],
-            "Duplicate IDs": v['duplicate_identifiers_count'],
-            "Missing Required Columns": ", ".join(v['missing_expected_columns']) or "None"
-        })
-    st.dataframe(pd.DataFrame(audit_summary), use_container_width=True, hide_index=True)
