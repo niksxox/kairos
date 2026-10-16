@@ -1,8 +1,8 @@
 """
-Kairos Core Package
-CampusSpace Intelligence decision-support system
+KAIROS Core Package
+Intelligent Campus Space Management & Optimization Platform
 """
 
 __version__ = "1.0.0"
-__product__ = "Kairos"
+__product__ = "KAIROS"
 __team__ = "Laphing Buddha"

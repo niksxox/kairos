@@ -1,4 +1,4 @@
-# Kairos - CampusSpace Intelligence
+# KAIROS - Intelligent Campus Space Decision-Support Platform
 # Core dependencies pinned for local Windows execution
 streamlit>=1.38.0
 pandas>=2.2.0
@@ -6,3 +6,4 @@ numpy>=1.26.0
 plotly>=5.20.0
 ortools>=9.10.0
 pytest>=8.0.0
+python-pptx>=1.0.0

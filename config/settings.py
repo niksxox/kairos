@@ -1,5 +1,5 @@
 """
-Kairos - CampusSpace Intelligence
+KAIROS - Intelligent Campus Space Decision-Support Platform
 Configuration and Settings Module
 Team: Laphing Buddha | DATATHON 2026
 """

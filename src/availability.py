@@ -76,12 +76,14 @@ class AvailabilityEngine:
         class_schedule_df: pd.DataFrame,
         events_df: pd.DataFrame,
         rooms_df: Optional[pd.DataFrame] = None,
-        buffer_minutes: int = DEFAULT_BUFFER_MINUTES
+        buffer_minutes: int = DEFAULT_BUFFER_MINUTES,
+        db_instance=None
     ):
         self.sched_df = class_schedule_df
         self.events_df = events_df
         self.rooms_df = rooms_df
         self.buffer_hours = buffer_minutes / 60.0
+        self.db = db_instance
 
     def get_room_intervals_for_date(
         self,
@@ -134,6 +136,18 @@ class AvailabilityEngine:
                     dur = float(row["duration_hours"])
                 e = s + dur
                 raw_intervals.append((s, e))
+
+        # 3. Dynamic Confirmed Student Bookings in SQLite database
+        if self.db is not None:
+            try:
+                db_bookings = self.db.get_confirmed_bookings_for_date(query_date_str)
+                for b in db_bookings:
+                    if b.get("room_id") == room_id:
+                        s = float(b["start_hour"])
+                        e = s + float(b["duration_hours"])
+                        raw_intervals.append((s, e))
+            except Exception:
+                pass
 
         return IntervalMerger.merge_intervals(raw_intervals)
 

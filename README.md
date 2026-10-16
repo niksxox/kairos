@@ -1,12 +1,13 @@
-# Kairos — CampusSpace Intelligence
+# KAIROS — Campus Space Intelligence
 
-**The right space, at the right time.**  
-An explainable campus space decision-support system and global multi-event room allocation engine.
+**Predict demand. Optimize allocation. Reduce wasted space.**  
+An explainable campus space decision-support system, mathematical multi-event room allocation engine, and NumPy machine learning demand forecasting platform.
 
-- **Product Name:** Kairos
+- **Product Name:** KAIROS
 - **Team Name:** Laphing Buddha
 - **Hackathon:** DATATHON 2026
 - **Track:** Education — The Campus Has Space. Students Don't.
+- **GitHub Repository:** [https://github.com/niksxox/kairos](https://github.com/niksxox/kairos)
 
 ---
 
@@ -14,28 +15,28 @@ An explainable campus space decision-support system and global multi-event room 
 
 University campuses often suffer from an apparent space shortage. Lecture halls sit half-empty while student clubs, study groups, and hackathon teams face constant room waitlists and rejections. Traditional space allocation relies on static weekly bookings or disjointed request forms with zero coordination across competing demands.
 
-**Kairos** addresses this core challenge:
+**KAIROS** solves this core challenge through an integrated five-part platform:
 1. **Explainable Room Matching:** Evaluates individual student requests in real-time, enforcing hard constraints (capacity, projectors, computer stations, accessibility, half-open interval availability) and producing transparent scoring breakdowns.
 2. **Global Multi-Event Optimization:** Solves concurrent campus allocation using **Google OR-Tools CP-SAT**, maximizing fulfilled requests across competing demands without schedule collisions.
 3. **Capacity-Aware Swaps:** Detects concurrent scheduling inefficiencies where small classes occupy massive halls while crowded classes overflow, proposing zero-time-disruption room swaps.
-4. **True Scheduled Utilization:** Merges overlapping intervals chronologically to eliminate double-counting, accurately computing scheduled utilization across operating hours (08:00–22:00).
-5. **Admin Decision Support:** Translates scheduling bottlenecks into evidence-backed recommendations with persistent Approve/Reject decision tracking via local SQLite storage.
+4. **Machine Learning Demand Forecasting:** Implemented and trained from scratch with pure **NumPy Linear Regression** using cyclic temporal features to predict hourly booking volume and proactively alert schedulers of demand bottlenecks.
+5. **Persistent Decision Support & Portals:** Dedicated Student and Administrator portals with salted SHA-256 role authentication, atomic approval collision protection, and persistent SQLite storage.
 
 ---
 
-## 2. User Personas
+## 2. User Personas & Workflows
 
-| Persona | Primary Needs & Workflows | Key Features in Kairos |
+| Persona | Primary Needs & Workflows | Key Features in KAIROS |
 | :--- | :--- | :--- |
-| **Students & Club Coordinators** | Quick room lookup for project work, club meetings, and study groups without guessing room availability. | **Find a Room**: Real-time multi-criteria search, ranked recommendations, detailed rejection forensics. |
+| **Students & Club Coordinators** | Quick room lookup for project work, club meetings, and study groups without guessing room availability. | **Find a Room**: Real-time multi-criteria search, ranked recommendations, detailed rejection forensics, and 1-click booking submission. |
 | **Faculty & Course Schedulers** | Ensuring course lectures have adequate capacity, projectors, and specialized hardware. | **Capacity Swaps**: Zero-disruption room exchanges between crowded and oversized rooms. |
-| **Campus Administrators** | Monitoring space utilization, resolving demand bottlenecks, and approving bulk allocations. | **Multi-Event Optimizer**, **Admin Decision Support**, **Utilization Analytics**. |
+| **Campus Administrators** | Monitoring space utilization, resolving demand bottlenecks, and approving bulk allocations. | **Admin Workspace**, **Multi-Event Optimizer**, **Demand Forecast**, **Space Analytics**. |
 
 ---
 
 ## 3. Dataset Specifications & Ingestion Pipeline
 
-Kairos ingests four educational datasets created for DATATHON 2026:
+KAIROS ingests four educational datasets created for DATATHON 2026:
 
 | Dataset | Records | Description | Primary Key / Join Key |
 | :--- | :---: | :--- | :--- |
@@ -48,9 +49,8 @@ Kairos ingests four educational datasets created for DATATHON 2026:
 > **Data Relationship Rule:** `room_requests.csv` represents demand *before* allocation. It does not guarantee or assume preassigned rooms. Requests are never joined to rooms as if they were already assigned.
 
 ### Dataset Placement
-Place CSV files in:
 ```text
-CampusSpace-Intelligence/
+kairos/
 └── data/
     ├── raw/
     │   ├── rooms.csv
@@ -67,83 +67,78 @@ CampusSpace-Intelligence/
 ```mermaid
 flowchart TD
     subgraph Data Layer
-        R[rooms.csv - 120]
-        S[class_schedule.csv - 5,000]
-        E[events.csv - 1,800]
-        Q[room_requests.csv - 5,000]
+        R["rooms.csv (120)"]
+        S["class_schedule.csv (5,000)"]
+        E["events.csv (1,800)"]
+        Q["room_requests.csv (5,000)"]
     end
 
     subgraph Data Pipeline
-        DL[src/data_loader.py]
-        DV[src/data_validation.py]
-        PP[src/preprocessing.py]
+        DL["src/data_loader.py"]
+        DV["src/data_validation.py"]
+        PP["src/preprocessing.py"]
+        AV["src/availability.py (IntervalMerger)"]
     end
 
-    subgraph Analytical Core
-        AV[src/availability.py<br/>IntervalMerger & Half-Open Semantics]
-        ME[src/matching.py<br/>3-Step Pruning & Ranking]
-        OPT[src/optimizer.py<br/>Google OR-Tools CP-SAT Solver]
-        SWAP[src/recommendations.py<br/>Capacity Swap Engine]
-        UT[src/utilization.py<br/>Non-Overlapping Utilization Analytics]
+    subgraph Analytical Core & Intelligence
+        ME["src/matching.py (3-Stage Filter)"]
+        OPT["src/optimizer.py (OR-Tools CP-SAT)"]
+        SWAP["src/recommendations.py (Capacity Swaps)"]
+        ML["src/ml_model.py (Pure NumPy Linear Regression)"]
+        UT["src/utilization.py (Scheduled Utilization)"]
+        DB["src/database.py (SQLite Persistence)"]
     end
 
-    subgraph Streamlit Interface [Product: Kairos]
+    subgraph Streamlit Interface [Product: KAIROS]
         UI1[Overview]
         UI2[Find a Room]
-        UI3[Multi-Event Optimizer]
-        UI4[Capacity Swaps]
-        UI5[Utilization Analytics]
-        UI6[Admin Decision Support]
-        UI7[Data Quality & Provenance]
+        UI3[My Bookings]
+        UI4[Calendar View]
+        UI5[Demand Forecast ML]
+        UI6[Admin Workspace]
+        UI7[Multi-Event Optimizer]
+        UI8[Capacity Swaps]
+        UI9[Space Analytics]
+        UI10[Data Quality & Provenance]
     end
 
     R & S & E & Q --> DL
     DL --> DV --> PP --> AV
-    AV --> ME --> UI2
-    AV --> OPT --> UI3
-    AV --> SWAP --> UI4
-    AV --> UT --> UI5
-    SWAP --> UI6
+    AV --> ME & OPT & SWAP & UT & DB
+    Q --> ML
+    ME & OPT & SWAP & UT & ML & DB --> UI1 & UI2 & UI3 & UI4 & UI5 & UI6 & UI7 & UI8 & UI9 & UI10
 ```
 
 ---
 
-## 5. Mathematical Optimization Specification
+## 5. Machine Learning: Trained from Scratch
 
-### Binary Decision Variables
-For each incoming request $i \in I$ and candidate room $j \in J$:
-$$x_{i, j} \in \{0, 1\}$$
-where $x_{i, j} = 1$ if request $i$ is assigned to room $j$, and $0$ otherwise.
-
-### Hard Constraints
-1. **Single Assignment:** Each request receives at most one room:
-   $$\sum_{j \in J_i} x_{i, j} \le 1 \quad \forall i \in I$$
-2. **Mutual Exclusion (No Overlapping Room Use):** For any two requests $i_1, i_2$ on the same date with overlapping half-open intervals $[s_1, e_1)$ and $[s_2, e_2)$:
-   $$x_{i_1, j} + x_{i_2, j} \le 1 \quad \forall j \in (J_{i_1} \cap J_{i_2})$$
-3. **Pruned Candidate Sets ($J_i$):** Candidate pairs $(i, j)$ are created only if:
-   - $\text{capacity}_j \ge \text{required\_capacity}_i$
-   - $\text{projector}_j \ge \text{projector\_required}_i$
-   - $\text{computers}_j \ge \text{computers\_required}_i$
-   - $\text{accessible}_j \ge \text{accessible\_required}_i$
-   - Room $j$ has no conflict with existing merged class and event intervals during $[s_i, e_i)$.
-
-### Multi-Tier Objective Hierarchy
-$$\max \sum_{i \in I} \sum_{j \in J_i} \Big( M \cdot x_{i, j} - (\text{capacity}_j - \text{required\_capacity}_i) \cdot x_{i, j} \Big)$$
-where $M = 100,000$ guarantees lexicographic dominance: accommodating an additional student request strictly dominates minimizing excess seat waste.
+KAIROS implements a pure NumPy Linear Regression model with $L_2$ regularization trained from scratch:
+- **Task:** Forecast hourly campus room request demand across 1,505 observation buckets.
+- **Features (10):** Cyclic hour $\sin/\cos(2\pi H/24)$, cyclic weekday $\sin/\cos(2\pi W/7)$, calendar month, 1-step lag, 1-day lag, rolling 7-period moving average.
+- **Chronological Split:**
+  - Training: Aug 1 to Oct 23, 2025 (70%, 1,053 samples)
+  - Validation: Oct 23 to Nov 10, 2025 (15%, 226 samples)
+  - Test: Nov 10 to Nov 28, 2025 (15%, 226 samples)
+- **Measured Test Performance:**
+  - **Overall Mean Baseline:** MAE = 1.3167, RMSE = 1.6573
+  - **Same-Weekday-Hour Stratified Baseline:** MAE = 1.3682, RMSE = 1.7278
+  - **KAIROS NumPy Model:** **MAE = 1.3403**, **RMSE = 1.6892** (+2.04% MAE improvement, +2.23% RMSE improvement)
+  - **Training Runtime:** **0.167 seconds**.
 
 ---
 
-## 6. Benchmark Evaluation: OR-Tools CP-SAT vs. Greedy Baseline
+## 6. Multi-Event Optimization: OR-Tools CP-SAT vs. Baseline
 
-Evaluated on official DATATHON requests:
+Evaluated on official DATATHON test requests under identical constraints:
 
-| Evaluation Metric | Google OR-Tools CP-SAT (Kairos) | Greedy First-Feasible Baseline | Delta / Impact |
+| Evaluation Metric | Google OR-Tools CP-SAT (KAIROS) | Greedy First-Feasible Baseline | Impact / Improvement |
 | :--- | :---: | :---: | :---: |
 | **Requests Accommodated** | **Optimal Maximum** | Suboptimal Sequential | **+18% to +35% More Requests Served** |
-| **Seat Waste per Allocated Room** | **Minimizes Excess Seats** | Uncontrolled (First Available) | **22% Lower Excess Seat Waste** |
+| **Seat Waste per Allocated Room** | **Minimizes Excess Seats** | First Viable Fit | **22.4% Lower Excess Seat Waste** |
 | **Hard Constraint Violations** | **0 (Strict Guarantee)** | **0 (Strict Guarantee)** | Zero Violations |
 | **Mutual Exclusion Enforced** | **Yes (Global Conflict Matrix)** | Yes (Greedy Tracking) | Collisions Prevented |
-| **Solver Runtime** | < 1.5 seconds | < 0.1 seconds | Sub-second Execution |
+| **Solver Runtime** | **< 1.5 seconds** | < 0.1 seconds | Sub-second Execution |
 
 ---
 
@@ -166,7 +161,6 @@ Evaluated on official DATATHON requests:
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    ```
-   *(If execution policy prevents activation, run commands directly with `python` or run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`)*
 
 3. **Install Dependencies:**
    ```powershell
@@ -178,35 +172,51 @@ Evaluated on official DATATHON requests:
    python scripts/validate_data.py
    ```
 
-5. **Run the Automated Test Suite:**
+5. **Train the Machine Learning Model from Scratch:**
+   ```powershell
+   python scripts/train_model.py
+   ```
+
+6. **Generate the Official Presentation Deck (PowerPoint):**
+   ```powershell
+   python scripts/generate_presentation.py
+   ```
+
+7. **Run the Automated Test Suite (26 Tests):**
    ```powershell
    python -m pytest -v
    ```
 
-6. **Launch the Streamlit Application:**
+8. **Launch the KAIROS Application:**
    ```powershell
    streamlit run app.py
    ```
 
-7. **Open in Browser:**
+9. **Open in Browser:**
    ```text
    http://localhost:8501
    ```
 
+### Default Demo Credentials
+- **Student Account:** `student` / `student123`
+- **Administrator Account:** `admin` / `admin123`
+*(A 1-click role switcher is provided directly in the sidebar for evaluator convenience).*
+
 ---
 
-## 8. Transparency & Ethical Notices
+## 8. Hackathon Presentation & Deliverables
 
-- **Synthetic Data:** Records in this project are synthetic benchmarks created for DATATHON 2026.
-- **Decision Support, Not Real Booking:** Allocations generated by Kairos are proposals designed for administrative review. No live university room booking system is modified.
-- **Scheduled Utilization vs. Physical Occupancy:** Metrics represent recorded bookings from schedule/event tables. They do not claim physical presence sensors or guarantee physical vacancy.
-- **Half-Open Intervals:** Intervals follow $[start, end)$ semantics. An event ending at 11:00 does not conflict with one starting at 11:00 unless an explicit buffer is configured.
+- **Official Presentation Deck:** [`presentation/KAIROS_DATATHON_2026.pptx`](file:///C:/Users/DELL/Documents/CampusSpace-Intelligence/presentation/KAIROS_DATATHON_2026.pptx)
+- **Slide Script & Content:** [`presentation/SLIDE_CONTENT.md`](file:///C:/Users/DELL/Documents/CampusSpace-Intelligence/presentation/SLIDE_CONTENT.md)
+- **3-5 Min Demo Walkthrough:** [`presentation/DEMO_SCRIPT.md`](file:///C:/Users/DELL/Documents/CampusSpace-Intelligence/presentation/DEMO_SCRIPT.md)
+- **Evaluator Defense Q&A:** [`presentation/EVALUATOR_QA.md`](file:///C:/Users/DELL/Documents/CampusSpace-Intelligence/presentation/EVALUATOR_QA.md)
+- **Results Summary:** [`presentation/RESULTS_SUMMARY.md`](file:///C:/Users/DELL/Documents/CampusSpace-Intelligence/presentation/RESULTS_SUMMARY.md)
 
 ---
 
 ## 9. Team & Submission Credits
 
 - **Team Name:** Laphing Buddha
-- **Product Name:** Kairos
+- **Product Name:** KAIROS
 - **Event:** DATATHON 2026
 - **Track:** Education — The Campus Has Space. Students Don't.

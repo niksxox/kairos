@@ -1,0 +1,54 @@
+{
+  "model_name": "NumPy Linear Regression (Trained from scratch)",
+  "framework": "Pure NumPy (No sklearn)",
+  "task": "Campus Hourly Request Demand Forecasting",
+  "target": "request_count (Hourly requests submitted)",
+  "train_samples": 1053,
+  "val_samples": 226,
+  "test_samples": 226,
+  "features": [
+    "norm_hour",
+    "sin_hour",
+    "cos_hour",
+    "sin_weekday",
+    "cos_weekday",
+    "weekday_num",
+    "month",
+    "lag_1",
+    "lag_day",
+    "rolling_mean_7"
+  ],
+  "feature_weights": {
+    "norm_hour": 0.0927,
+    "sin_hour": 0.1453,
+    "cos_hour": -0.1099,
+    "sin_weekday": -0.0723,
+    "cos_weekday": -0.0383,
+    "weekday_num": -0.0791,
+    "month": 0.0123,
+    "lag_1": -0.0891,
+    "lag_day": 0.0553,
+    "rolling_mean_7": 0.0958
+  },
+  "bias": 3.2991,
+  "baselines": {
+    "overall_mean": {
+      "mae": 1.3167,
+      "mse": 2.7467,
+      "rmse": 1.6573
+    },
+    "same_weekday_hour_mean": {
+      "mae": 1.3682,
+      "mse": 2.9853,
+      "rmse": 1.7278
+    }
+  },
+  "model_test_metrics": {
+    "mae": 1.3403,
+    "mse": 2.8536,
+    "rmse": 1.6892
+  },
+  "improvement_pct_mae": 2.04,
+  "improvement_pct_rmse": 2.23,
+  "training_time_seconds": 0.167
+}
