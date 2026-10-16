@@ -3,7 +3,7 @@ Kairos - Preprocessing & Normalization Module
 Standardizes datatypes, parses datetime intervals, and generates derived temporal features.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 import pandas as pd
 import numpy as np
 
@@ -119,3 +119,18 @@ class Preprocessor:
             "events": cls.process_events(datasets.get("events", pd.DataFrame())),
             "room_requests": cls.process_requests(datasets.get("room_requests", pd.DataFrame())),
         }
+
+    @classmethod
+    def preprocess_all(
+        cls,
+        rooms_df: pd.DataFrame,
+        sched_df: pd.DataFrame,
+        events_df: pd.DataFrame,
+        reqs_df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        return (
+            cls.process_rooms(rooms_df),
+            cls.process_schedule(sched_df),
+            cls.process_events(events_df),
+            cls.process_requests(reqs_df)
+        )
