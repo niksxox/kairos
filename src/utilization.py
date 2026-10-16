@@ -130,6 +130,22 @@ class UtilizationEngine:
 
         return pd.DataFrame(grid)
 
+    def get_all_room_utilization(self) -> pd.DataFrame:
+        """Alias for compute_weekly_schedule_utilization."""
+        return self.compute_weekly_schedule_utilization()
+
+    def get_hourly_heatmap_matrix(self) -> pd.DataFrame:
+        """
+        Transforms hourly heatmap data into a 2D matrix (index=weekday, columns=hour)
+        suitable for heatmap visualization.
+        """
+        df = self.compute_hourly_heatmap_data()
+        if df.empty:
+            return pd.DataFrame()
+        matrix = df.pivot(index="weekday", columns="hour", values="rooms_occupied")
+        ordered_days = [w for w in VALID_WEEKDAYS if w in matrix.index]
+        return matrix.reindex(ordered_days)
+
     def compute_demand_vs_supply(self, requests_df: pd.DataFrame) -> Dict[str, Any]:
         """
         Compares capacity bands of requested demand vs physical room inventory.

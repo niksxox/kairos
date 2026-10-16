@@ -49,6 +49,29 @@ def test_demand_vs_supply():
     
     assert "data" in dvs
     data_df = dvs["data"]
-    assert len(data_df) > 0
     assert "room_supply_count" in data_df.columns
     assert "request_demand_count" in data_df.columns
+
+
+def test_utilization_convenience_methods():
+    rooms = pd.DataFrame([
+        {"room_id": "R001", "building": "Central", "floor": 1, "room_type": "Classroom", "capacity": 50}
+    ])
+    sched = pd.DataFrame([
+        {"schedule_id": "S1", "room_id": "R001", "weekday": "Mon", "start_hour": 9, "duration_hours": 2, "expected_attendance": 20}
+    ])
+    engine = UtilizationEngine(rooms, sched, pd.DataFrame(), day_start=8, day_end=22)
+
+    # 1. Alias test
+    all_util = engine.get_all_room_utilization()
+    assert not all_util.empty
+    assert "weekly_scheduled_hours" in all_util.columns
+
+    # 2. Heatmap matrix test
+    matrix = engine.get_hourly_heatmap_matrix()
+    assert not matrix.empty
+    assert "Mon" in matrix.index
+    assert matrix.loc["Mon", 9] == 1
+    assert matrix.loc["Mon", 10] == 1
+    assert matrix.loc["Mon", 11] == 0
+

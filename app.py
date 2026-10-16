@@ -794,33 +794,40 @@ elif page == "Campus Space Usage":
 
     tab1, tab2 = st.tabs(["Room Usage List", "Weekly Busy Hours"])
     with tab1:
-        util_data = util_engine.get_all_room_utilization().copy()
-        util_data["Usage Percentage"] = util_data["scheduled_utilization_rate"].apply(lambda v: f"{v*100:.1f}%")
-        util_display = util_data.rename(columns={
-            "room_id": "Room",
-            "building": "Building",
-            "room_type": "Room Type",
-            "capacity": "Capacity",
-            "weekly_scheduled_hours": "Weekly Hours Booked"
-        })
-        st.dataframe(
-            util_display[["Room", "Building", "Room Type", "Capacity", "Weekly Hours Booked", "Usage Percentage"]],
-            use_container_width=True,
-            hide_index=True
-        )
+        util_data = util_engine.get_all_room_utilization()
+        if not util_data.empty:
+            util_data = util_data.copy()
+            util_data["Usage Percentage"] = util_data["scheduled_utilization_rate"].apply(lambda v: f"{v:.1f}%")
+            util_display = util_data.rename(columns={
+                "room_id": "Room",
+                "building": "Building",
+                "room_type": "Room Type",
+                "capacity": "Capacity",
+                "weekly_scheduled_hours": "Weekly Hours Booked"
+            })
+            st.dataframe(
+                util_display[["Room", "Building", "Room Type", "Capacity", "Weekly Hours Booked", "Usage Percentage"]],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No utilization records found.")
 
     with tab2:
         st.write("Darker blue blocks show peak hours when most rooms are occupied by classes and events.")
         hm = util_engine.get_hourly_heatmap_matrix()
-        fig = px.imshow(
-            hm,
-            labels=dict(x="Hour", y="Day of Week", color="Occupied Rooms"),
-            x=[f"{h:02d}:00" for h in hm.columns],
-            y=list(hm.index),
-            color_continuous_scale="Blues"
-        )
-        fig.update_layout(height=400, margin=dict(l=0, r=0, t=20, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+        if not hm.empty:
+            fig = px.imshow(
+                hm,
+                labels=dict(x="Hour", y="Day of Week", color="Occupied Rooms"),
+                x=[f"{h:02d}:00" for h in hm.columns],
+                y=list(hm.index),
+                color_continuous_scale="Blues"
+            )
+            fig.update_layout(height=400, margin=dict(l=0, r=0, t=20, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No heatmap data available.")
 
 
 # -----------------------------------------------------------------------------
