@@ -278,3 +278,31 @@ class RoomMatchingEngine:
                 cons.append(f"Located in {room_info['building']} Building instead of {preferred_building}")
 
         return pros, cons
+
+    def find_and_rank_rooms(
+        self,
+        request_date: str,
+        start_hour: float,
+        duration_hours: float,
+        required_capacity: int,
+        projector_required: bool = False,
+        computers_required: bool = False,
+        accessible_required: bool = False,
+        preferred_room_type: Optional[str] = None,
+        preferred_building: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Convenience wrapper returning (recommendations, rejected) tuple.
+        """
+        res = self.evaluate_request(
+            request_date=request_date,
+            start_hour=start_hour,
+            duration_hours=duration_hours,
+            required_capacity=required_capacity,
+            projector_required=projector_required,
+            computers_required=computers_required,
+            accessible_required=accessible_required,
+            preferred_room_type=preferred_room_type,
+            preferred_building=preferred_building
+        )
+        return res.get("recommendations", []), res.get("rejected", [])
