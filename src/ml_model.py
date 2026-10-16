@@ -255,7 +255,7 @@ class DemandForecaster:
             return {"error": "Model not loaded"}
 
         dt = pd.to_datetime(date_str)
-        w_num = dt.weekday
+        w_num = float(dt.dayofweek if hasattr(dt, "dayofweek") else (dt.weekday() if callable(dt.weekday) else dt.weekday))
         h = float(start_hour)
 
         # Default historical lag estimators if no live buffer passed

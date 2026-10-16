@@ -50,3 +50,21 @@ def test_demand_forecaster_feature_preparation():
     assert len(X) == 3
     assert len(f_names) == 10
     assert X.shape[1] == 10
+
+
+def test_demand_forecaster_predict_slot():
+    forecaster = DemandForecaster()
+    # Mock model
+    forecaster.model = CustomLinearRegression()
+    forecaster.model.weights = np.zeros(10)
+    forecaster.model.bias = 3.5
+    forecaster.model.scaler_mean = np.zeros(10)
+    forecaster.model.scaler_std = np.ones(10)
+
+    pred = forecaster.predict_slot(date_str="2025-11-25", start_hour=14)
+    assert pred is not None
+    assert "predicted_requests" in pred
+    assert pred["predicted_requests"] == 3.5
+    assert pred["weekday"] == "Tuesday"
+    assert pred["demand_intensity"] in ["Low", "Moderate", "High"]
+
