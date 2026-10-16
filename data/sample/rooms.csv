@@ -1,0 +1,21 @@
+room_id,building,floor,room_type,capacity,projector,computers,accessible,power_outlets
+R001,Central,1,Classroom,56,1,0,1,7
+R002,West,4,Lab,57,1,0,1,7
+R003,North,3,Seminar,137,1,1,1,17
+R004,East,5,Classroom,87,1,0,1,28
+R005,East,2,Study room,66,1,1,1,11
+R006,West,5,Lab,165,1,1,1,8
+R007,North,5,Classroom,142,1,0,1,29
+R008,Central,3,Study room,102,0,0,1,25
+R009,Central,5,Auditorium,36,1,0,1,7
+R010,North,4,Seminar,41,1,0,1,10
+R011,West,1,Classroom,67,1,0,1,23
+R012,North,1,Classroom,19,1,1,1,9
+R013,Central,3,Classroom,164,1,0,1,11
+R014,North,4,Classroom,147,1,0,1,7
+R015,South,4,Classroom,61,1,0,1,10
+R016,East,4,Seminar,18,0,1,1,6
+R017,West,0,Seminar,27,1,0,1,23
+R018,East,2,Seminar,125,1,0,1,25
+R019,South,0,Classroom,60,1,0,0,9
+R020,South,2,Classroom,90,1,0,1,29
